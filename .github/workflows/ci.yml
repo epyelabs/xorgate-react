@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 20 is the floor `engines` promises; 22 is what most consumers run.
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # Every example on the docs site, compiled against the BUILT package.
+      - run: npm run check:examples
+
+      # From the built output, not from import statements: a REST-only page
+      # must not pull the KVS/AWS/mqtt code into its entry chunk.
+      - run: npm run check:bundle
+
+      # Pack the artifact, install it into an empty project and use it as a
+      # consumer would. This class of check is what found @xorgate/sdk@0.1.0's
+      # credential leak after every other suite had passed.
+      - run: npm run verify:tarball
+
+  e2e:
+    # Runs the BUILT package in headless Chromium against PRODUCTION (live
+    # telemetry, live video, and the Sessions replay acceptance test), with
+    # credentials from repo secrets — so not for a fork's pull request. It
+    # only READS from the shared bench device and vends workspace-scoped
+    # credentials; it never writes device config.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: |
+          printf 'XORGATE_API_KEY=%s\nXORGATE_ORG_ID=%s\nXORGATE_TEST_DEVICE_ID=%s\nXORGATE_TEST_WORKSPACE_ID=%s\n' \
+            "$XORGATE_API_KEY" "$XORGATE_ORG_ID" "$XORGATE_TEST_DEVICE_ID" "$XORGATE_TEST_WORKSPACE_ID" > .env
+        env:
+          XORGATE_API_KEY: ${{ secrets.XORGATE_API_KEY }}
+          XORGATE_ORG_ID: ${{ secrets.XORGATE_ORG_ID }}
+          XORGATE_TEST_DEVICE_ID: ${{ secrets.XORGATE_TEST_DEVICE_ID }}
+          XORGATE_TEST_WORKSPACE_ID: ${{ secrets.XORGATE_TEST_WORKSPACE_ID }}
+      - run: npm run e2e
+        env:
+          # Turns "unconfigured" from a skip into a hard failure. The suite
+          # skips itself with no credential, which is right locally and wrong
+          # here: a green job that asserted nothing is the state everyone
+          # stops looking at (the lesson @xorgate/sdk's first CI run taught).
+          XORGATE_REQUIRE_E2E: "1"
