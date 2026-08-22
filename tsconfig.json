@@ -17,7 +17,15 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "noEmit": true
+    "noEmit": true,
+    // e2e/app.tsx imports "@xorgate/react" like a consumer. Without this
+    // mapping TypeScript resolves that through the package's own `exports`
+    // self-reference to dist/index.d.ts, which only exists after a build —
+    // so `npm run typecheck` on a fresh checkout (CI runs it BEFORE build)
+    // failed with TS2307. Typecheck reads the source; `check:examples` still
+    // checks the BUILT declarations via tsconfig.examples.json.
+    "baseUrl": ".",
+    "paths": { "@xorgate/react": ["./src/index.ts"] }
   },
   "include": ["src", "test", "scripts", "e2e"]
 }
