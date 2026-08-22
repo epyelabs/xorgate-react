@@ -1,0 +1,87 @@
+{
+  "name": "@xorgate/react",
+  "version": "0.1.0",
+  "description": "Headless React SDK for the xorgate platform: data hooks, live telemetry over MQTT, live video over WebRTC, and the recorded-media replay player.",
+  "license": "MIT",
+  "author": "Epye Labs",
+  "homepage": "https://docs.xorgate.io/docs/frontend-sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/epyelabs/xorgate-react.git"
+  },
+  "bugs": {
+    "url": "https://github.com/epyelabs/xorgate-react/issues"
+  },
+  "keywords": [
+    "xorgate",
+    "react",
+    "hooks",
+    "iot",
+    "telemetry",
+    "webrtc",
+    "video",
+    "replay"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "check:examples": "tsc -p tsconfig.examples.json",
+    "ci": "npm run typecheck && npm test && npm run build && npm run check:examples && npm run check:bundle && npm run verify:tarball",
+    "clean": "rm -rf dist .tmp",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "e2e": "node e2e/run.mjs",
+    "prepack": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:tarball": "node scripts/verify-tarball.mjs"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0 || ^19.0.0"
+  },
+  "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/client-kinesis-video": "^3.1064.0",
+    "@aws-sdk/client-kinesis-video-signaling": "^3.1064.0",
+    "@aws-sdk/credential-provider-cognito-identity": "^3.972.42",
+    "@xorgate/sdk": "^0.1.1",
+    "amazon-kinesis-video-streams-webrtc": "^2.8.0",
+    "events": "^3.3.0",
+    "mqtt": "^5.15.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.2.4",
+    "esbuild": "^0.25.0",
+    "jsdom": "^25.0.1",
+    "playwright": "^1.49.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

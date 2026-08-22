@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.tmp/
+*.tgz
+.env
+e2e/artifacts/
+e2e/.bundle.js
