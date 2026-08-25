@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+- **`@xorgate/sdk` dependency bumped to `^0.3.0`** (cm4-support surface).
+  The hooks pass the new capability straight through: `useDevice`/`useDevices`
+  rows now carry the typed `needsModel`, device models validate as
+  `io_capabilities` schemaVersion 1 or 2, and `devices.update({deviceModelId})`
+  / `deviceRegistrations.create({deviceModelId})` are available via
+  `useXorgate()`. No API changes in this package itself.
+
 ## 0.1.0
 
 Initial release: the full designed surface, extracted from xorgate-web and
