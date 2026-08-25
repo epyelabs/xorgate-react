@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- **`@xorgate/sdk` dependency bumped to `^0.4.0`** (camera sensor-level
+  rotation). Nothing in this package changes: the hooks pass the new
+  `cameraMount` config namespace straight through, and a consumer that wants
+  the typed namespace needs this bump only because `^0.3.0` would otherwise
+  pin the SDK a minor behind.
+
 ## 0.1.1
 
 - **`@xorgate/sdk` dependency bumped to `^0.3.0`** (cm4-support surface).
