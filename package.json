@@ -1,6 +1,6 @@
 {
   "name": "@xorgate/react",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Headless React SDK for the xorgate platform: data hooks, live telemetry over MQTT, live video over WebRTC, and the recorded-media replay player.",
   "license": "MIT",
   "author": "Epye Labs",
@@ -66,7 +66,7 @@
     "@aws-sdk/client-kinesis-video": "^3.1064.0",
     "@aws-sdk/client-kinesis-video-signaling": "^3.1064.0",
     "@aws-sdk/credential-provider-cognito-identity": "^3.972.42",
-    "@xorgate/sdk": "^0.4.0",
+    "@xorgate/sdk": "^0.5.0",
     "amazon-kinesis-video-streams-webrtc": "^2.8.0",
     "events": "^3.3.0",
     "mqtt": "^5.15.1"

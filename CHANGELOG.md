@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+
+- **`@xorgate/sdk` dependency bumped to `^0.5.0`** (session poster frames).
+  Nothing in this package changes: the re-exported `MediaSession` type now
+  carries `thumbnailUrl`, and without this bump `^0.4.0` keeps consumers'
+  type resolution nested on an SDK a minor behind.
+
 ## 0.1.2
 
 - **`@xorgate/sdk` dependency bumped to `^0.4.0`** (camera sensor-level
