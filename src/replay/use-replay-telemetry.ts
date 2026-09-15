@@ -4,7 +4,7 @@ import type { LatestByMetric, MetricName, TelemetryHistory } from "@xorgate/sdk"
 import { declaredMetrics } from "@xorgate/sdk";
 import { useXorgateContext } from "../context.js";
 import type { UseTelemetryHistoryParams } from "../query/hooks.js";
-import type { UseReplayPlayer } from "./use-replay-player.js";
+import type { UseReplayPlayerCore } from "./use-replay-player-core.js";
 import {
   buildTrace,
   chooseIntervalSeconds,
@@ -111,10 +111,15 @@ interface GroupWindow {
  * Telemetry for a replay, in two tiers: one coarse interval-averaged pass over
  * the whole window for the route and the scrub preview, plus a raw
  * high-resolution window that follows the playhead with hysteresis.
+ *
+ * `player` is the player CORE, not the browser wrapper: this reads a timeline
+ * and a playhead and has no idea what is playing the video, which is what
+ * lets `@xorgate/react-native`'s player drive it unchanged. `UseReplayPlayer`
+ * extends the core, so a browser caller passes the same object it always did.
  */
 export function useReplayTelemetry(
   deviceId: string | null,
-  player: UseReplayPlayer,
+  player: UseReplayPlayerCore,
   options: UseReplayTelemetryOptions = {},
 ): UseReplayTelemetry {
   const ctx = useXorgateContext();

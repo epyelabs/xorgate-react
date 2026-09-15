@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1
+
+Types only. No runtime change: `dist/index.js` is byte-identical to 0.2.0 and
+the one emitted file that moved differs by a doc comment.
+
+- `useReplayTelemetry(deviceId, player)` now takes `UseReplayPlayerCore`, not
+  the browser `UseReplayPlayer`. It reads a timeline and a playhead and has no
+  idea what is playing the video, so requiring a `laneVideoRef` shut React
+  Native out of a hook that works there unchanged. `UseReplayPlayer` extends
+  the core, so every browser caller is unaffected.
+
+  Supersedes 0.2.0, which was cut but never published.
+
 ## 0.2.0
 
 Accepted by Phase 6 N2: `@xorgate/react-native` 0.1.0 is built on the platform

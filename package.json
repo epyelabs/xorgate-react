@@ -1,6 +1,6 @@
 {
   "name": "@xorgate/react",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Headless React SDK for the xorgate platform: data hooks, live telemetry over MQTT, live video over WebRTC, and the recorded-media replay player.",
   "license": "MIT",
   "author": "Epye Labs",
