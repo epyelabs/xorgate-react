@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.2.0 (pre-release `0.2.0-next.1`)
+## 0.2.0
+
+Accepted by Phase 6 N2: `@xorgate/react-native` 0.1.0 is built on the platform
+slot below and is published, so the pre-release `0.2.0-next.1` is promoted
+unchanged — the only difference between them is this version number.
 
 Additive: no web consumer needs a change, and `dist/index.js` differs from
 0.1.3 only by what is new. This release makes the package platform-neutral so
