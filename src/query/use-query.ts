@@ -154,16 +154,21 @@ export function useXorgateQuery<T>(
     return () => clearInterval(t);
   }, [enabled, interval, execute]);
 
-  // Focus refetch, defaulting on with polling.
+  // Focus refetch, defaulting on with polling. A platform's wake source
+  // (React Native: AppState active / network back) replaces the browser's
+  // visibilitychange; without one the browser path is unchanged.
   const refetchOnFocus = options.refetchOnFocus ?? interval !== undefined;
+  const subscribeWake = ctx.platform.subscribeWake;
   useEffect(() => {
-    if (!enabled || !refetchOnFocus || typeof document === "undefined") return;
+    if (!enabled || !refetchOnFocus) return;
+    if (subscribeWake) return subscribeWake(() => void execute());
+    if (typeof document === "undefined") return;
     const onVisible = () => {
       if (document.visibilityState === "visible") void execute();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [enabled, refetchOnFocus, execute]);
+  }, [enabled, refetchOnFocus, execute, subscribeWake]);
 
   const refetch = useCallback(async () => {
     if (!enabled) return;

@@ -57,6 +57,34 @@ export { useLivePlane } from "./live/use-live-plane.js";
 export { useLiveCredentials } from "./live/use-live-credentials.js";
 
 // ---------------------------------------------------------------------------
+// The platform slot (0.2.0): host-runtime adapters, browser by default
+// ---------------------------------------------------------------------------
+
+export {
+  browserPlatform,
+  browserSubscribeWake,
+  browserRandomId,
+  type XorgatePlatform,
+} from "./platform.js";
+export type {
+  WebRtcPlatform,
+  PeerConnectionLike,
+  SignalingLike,
+  TimerHost,
+} from "./live/kvs-session.js";
+export { createWebRtcPlatform, type WebRtcPlatformOverrides } from "./live/webrtc-platform.js";
+export type {
+  MqttLikeClient,
+  TelemetrySnapshot,
+  TelemetryFeedDeps,
+} from "./live/telemetry-feed.js";
+export type {
+  MqttConnectionSpec,
+  ResolvedLiveCredentials,
+} from "./live/credential-resolver.js";
+export { parseTelemetryPayload, type ParsedTelemetryPayload } from "./live/payload.js";
+
+// ---------------------------------------------------------------------------
 // The query contract and data hooks
 // ---------------------------------------------------------------------------
 
@@ -124,6 +152,11 @@ export {
   type LiveVideoStatus,
   type LiveVideoStats,
 } from "./live/use-live-video.js";
+export {
+  useLiveVideoSession,
+  type UseLiveVideoSession,
+  type UseLiveVideoSessionOptions,
+} from "./live/use-live-video-session.js";
 export { LiveVideo, type LiveVideoProps } from "./live/live-video.js";
 
 // ---------------------------------------------------------------------------
@@ -175,6 +208,15 @@ export {
   type ReplayLaneState,
   type ReplayLaneStatus,
 } from "./replay/use-replay-player.js";
+export {
+  useReplayPlayerCore,
+  type UseReplayPlayerCore,
+} from "./replay/use-replay-player-core.js";
+export type {
+  ReplayEngine,
+  ReplayEngineOptions,
+  ReplayEngineFactory,
+} from "./replay/replay-engine.js";
 export {
   useReplayTelemetry,
   type UseReplayTelemetry,

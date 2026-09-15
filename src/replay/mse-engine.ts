@@ -1,5 +1,6 @@
 import type { ReplaySegment } from "@xorgate/sdk";
 import { parseSegmentMediaInfo } from "./mp4-box.js";
+import type { ReplayEngine, ReplayEngineOptions } from "./replay-engine.js";
 import { nextSegmentAfter, segmentAt, segmentEnd, type ReplayTimeline } from "./timeline.js";
 
 // How far behind the playhead we keep buffered media when Chrome's quota
@@ -22,8 +23,12 @@ interface AppendTask {
  * the parsed tfdt rather than trusting the file to start at zero, one segment
  * of prefetch, quota-evict + retry on `QuotaExceededError`, and
  * `video.buffered` as the truth because WebKit evicts silently.
+ *
+ * The browser's `ReplayEngine`: the media surface the player core drives
+ * (position, play/pause, rate, buffered ranges, stalls) is the `<video>`
+ * element itself.
  */
-export class MseEngine {
+export class MseEngine implements ReplayEngine {
   private readonly video: HTMLVideoElement;
   private readonly timeline: ReplayTimeline;
   private readonly getUrl: (seg: ReplaySegment) => string;
@@ -44,20 +49,61 @@ export class MseEngine {
   private readonly lastAttempt = new Map<number, number>();
   private readonly abort = new AbortController();
 
-  constructor(opts: {
-    video: HTMLVideoElement;
-    timeline: ReplayTimeline;
-    getUrl: (seg: ReplaySegment) => string;
-    onError: (message: string) => void;
-    onUpdate: () => void;
-    onAuthError?: () => void;
-  }) {
+  constructor(opts: ReplayEngineOptions & { video: HTMLVideoElement }) {
     this.video = opts.video;
     this.timeline = opts.timeline;
     this.getUrl = opts.getUrl;
     this.onError = opts.onError;
     this.onUpdate = opts.onUpdate;
     this.onAuthError = opts.onAuthError;
+  }
+
+  // --- the media surface (ReplayEngine) ------------------------------------
+
+  get position(): number {
+    return this.video.currentTime;
+  }
+
+  get paused(): boolean {
+    return this.video.paused;
+  }
+
+  buffered(): Array<{ start: number; end: number }> {
+    const { buffered } = this.video;
+    const out: Array<{ start: number; end: number }> = [];
+    for (let i = 0; i < buffered.length; i++) {
+      out.push({ start: buffered.start(i), end: buffered.end(i) });
+    }
+    return out;
+  }
+
+  seek(posSec: number): void {
+    this.video.currentTime = posSec;
+  }
+
+  play(): void {
+    void this.video.play().catch(() => {
+      /* interrupted by pause/seek — the next notify reconciles */
+    });
+  }
+
+  pause(): void {
+    this.video.pause();
+  }
+
+  setRate(rate: number): void {
+    if (this.video.playbackRate !== rate) this.video.playbackRate = rate;
+  }
+
+  /** HAVE_CURRENT_DATA or less: the element cannot advance. */
+  isStalled(): boolean {
+    return this.video.readyState <= 2;
+  }
+
+  on(event: "waiting" | "firstFrame", cb: () => void): () => void {
+    const name = event === "waiting" ? "waiting" : "loadeddata";
+    this.video.addEventListener(name, cb);
+    return () => this.video.removeEventListener(name, cb);
   }
 
   destroy(): void {
