@@ -1,5 +1,9 @@
 # @xorgate/react
 
+[![npm](https://img.shields.io/npm/v/@xorgate/react.svg)](https://www.npmjs.com/package/@xorgate/react)
+[![CI](https://github.com/epyelabs/xorgate-react/actions/workflows/ci.yml/badge.svg)](https://github.com/epyelabs/xorgate-react/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/@xorgate/react.svg)](./LICENSE)
+
 The headless React SDK for the [xorgate](https://xorgate.io) platform: data
 hooks over [`@xorgate/sdk`](https://www.npmjs.com/package/@xorgate/sdk), live
 telemetry over MQTT-over-WebSocket, live video over WebRTC, and the
