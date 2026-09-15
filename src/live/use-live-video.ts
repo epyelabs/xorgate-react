@@ -1,11 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import type { VideoChannel, XorgateError } from "@xorgate/sdk";
-import { useXorgateContext } from "../context.js";
 import type { LiveUnavailableReason } from "../config.js";
-import { KvsViewerSession } from "./kvs-session.js";
 import type { LiveVideoStats, LiveVideoStatus } from "./kvs-session.js";
-import { createWebRtcPlatform } from "./webrtc-platform.js";
+import { useLiveVideoSession } from "./use-live-video-session.js";
 
 export type { LiveVideoStatus, LiveVideoStats } from "./kvs-session.js";
 
@@ -36,79 +34,42 @@ export interface UseLiveVideoOptions {
  * page for what each piece answers. A reconnect deliberately does NOT clear
  * the `<video>` element, so the last frame stays on screen instead of flashing
  * to black.
+ *
+ * This is the browser wrapper over `useLiveVideoSession`; React Native
+ * consumers use `@xorgate/react-native`'s `useLiveVideo`, which renders the
+ * same session into an `RTCView`.
  */
 export function useLiveVideo(
   channel: VideoChannel | null,
   options: UseLiveVideoOptions = {},
 ): UseLiveVideo {
-  const { live } = useXorgateContext();
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [status, setStatus] = useState<LiveVideoStatus>("connecting");
-  const [unavailableReason, setUnavailableReason] = useState<LiveUnavailableReason | null>(null);
-  const [error, setError] = useState<XorgateError | null>(null);
-  const [stats, setStats] = useState<LiveVideoStats | null>(null);
 
-  const enabled = options.enabled !== false;
-  const statsIntervalMs = options.statsIntervalMs;
-
-  useEffect(() => {
-    if (!channel || !enabled) return;
-
-    const availability = live.availability();
-    if (!availability.available) {
-      setStatus("unavailable");
-      setUnavailableReason(availability.reason);
-      return;
+  // Always (re)attach the incoming stream: on a reconnect the previous
+  // srcObject points at a dead stream, and only attaching when empty would
+  // leave the element frozen on the last frame.
+  const onStream = useCallback((stream: unknown) => {
+    const video = videoRef.current;
+    if (video && video.srcObject !== stream) {
+      video.srcObject = stream as MediaProvider;
     }
-    setUnavailableReason(null);
+  }, []);
 
-    const session = new KvsViewerSession({
-      channelRef: channel.channelRef,
-      region: channel.region || undefined,
-      resolver: live,
-      platform: createWebRtcPlatform(),
-      ...(statsIntervalMs !== undefined ? { statsIntervalMs } : {}),
-      callbacks: {
-        onStatus: (s, err) => {
-          setStatus(s);
-          setError(err);
-        },
-        onStats: setStats,
-        onStream: (stream) => {
-          const video = videoRef.current;
-          if (video && video.srcObject !== stream) {
-            video.srcObject = stream as MediaProvider;
-          }
-        },
-      },
-    });
-    session.start();
+  const session = useLiveVideoSession(channel, {
+    onStream,
+    ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
+    ...(options.statsIntervalMs !== undefined ? { statsIntervalMs: options.statsIntervalMs } : {}),
+  });
 
-    // Mobile browsers freeze background tabs; when the page becomes visible
-    // (or the network returns), start fresh instead of waiting out a stale
-    // backoff.
-    const nudge = () => {
-      if (document.visibilityState !== "visible") return;
-      session.nudge();
-    };
-    window.addEventListener("online", nudge);
-    window.addEventListener("pageshow", nudge);
-    document.addEventListener("visibilitychange", nudge);
-
+  // Clear the element when the session goes away (channel change, disable,
+  // unmount), never on a reconnect.
+  const active = channel !== null && options.enabled !== false;
+  useEffect(() => {
+    if (!active) return;
     return () => {
-      window.removeEventListener("online", nudge);
-      window.removeEventListener("pageshow", nudge);
-      document.removeEventListener("visibilitychange", nudge);
-      session.destroy();
       if (videoRef.current) videoRef.current.srcObject = null;
-      setStatus("connecting");
-      setError(null);
-      setStats(null);
     };
-    // Channel identity is (channelRef, region); an inline channel object must
-    // not bounce the session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, channel?.channelRef, channel?.region, enabled, statsIntervalMs]);
+  }, [active, channel?.channelRef, channel?.region]);
 
-  return { videoRef, status, unavailableReason, error, stats };
+  return { videoRef, ...session };
 }

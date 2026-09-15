@@ -37,7 +37,7 @@ export function useLiveTelemetry(
   deviceId: string | null,
   options: UseLiveTelemetryOptions = {},
 ): UseLiveTelemetry {
-  const { live } = useXorgateContext();
+  const { live, platform } = useXorgateContext();
   const enabled = options.enabled !== false;
   const { historyLimit, flushMs } = options;
 
@@ -48,7 +48,12 @@ export function useLiveTelemetry(
       setSnap(IDLE);
       return;
     }
-    const feed = acquireFeed(live, deviceId);
+    // The platform slots ride along on first acquisition; later mounters
+    // share the same feed (a provider's platform is stable for its life).
+    const feed = acquireFeed(live, deviceId, {
+      ...(platform.mqttConnect ? { connect: platform.mqttConnect } : {}),
+      ...(platform.subscribeWake ? { subscribeWake: platform.subscribeWake } : {}),
+    });
     feed.tune({
       ...(historyLimit !== undefined ? { historyLimit } : {}),
       ...(flushMs !== undefined ? { flushMs } : {}),
@@ -59,6 +64,8 @@ export function useLiveTelemetry(
       unsubscribe();
       releaseFeed(live, deviceId, feed);
     };
+    // `platform` is read once per feed; a provider does not change it mid-life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, deviceId, enabled, historyLimit, flushMs]);
 
   return snap;

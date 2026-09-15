@@ -6,6 +6,7 @@ import type {
   XorgateConfig,
 } from "../config.js";
 import type { RestState } from "../context.js";
+import { browserRandomId, type XorgatePlatform } from "../platform.js";
 
 /** The four SigV4 fields, expiration parsed, ready to sign with. */
 export interface ResolvedLiveCredentials {
@@ -39,6 +40,8 @@ interface ResolverDeps {
   getConfig: () => XorgateConfig & { baseUrl: string };
   getRest: () => RestState;
   getTenancy: () => { organizationId: string | null; workspaceId: string | undefined };
+  /** Optional so a test stub or an older caller can omit it: the browser default applies. */
+  getPlatform?: () => XorgatePlatform;
 }
 
 /** Refresh a cached credential when it is this close to its expiry. */
@@ -81,6 +84,11 @@ export class LiveCredentialResolver {
 
   private get d(): ResolverDeps {
     return (this as unknown as { deps: ResolverDeps }).deps;
+  }
+
+  /** Client-id entropy from the platform slot, `crypto.randomUUID()` by default. */
+  private randomId(): string {
+    return (this.d.getPlatform?.().randomId ?? browserRandomId)();
   }
 
   mode(): Mode {
@@ -315,7 +323,7 @@ export class LiveCredentialResolver {
         credentials,
         region,
         endpoint: realtimeEndpoint,
-        clientId: `${identityId}-web-${crypto.randomUUID()}`,
+        clientId: `${identityId}-web-${this.randomId()}`,
         // BOTH telemetry planes: a device publishes to the unscoped topic
         // until the cloud tells it its tenant, and to the tenant-scoped one
         // after. The `+` wildcards stand in for the org and workspace, which
@@ -356,7 +364,7 @@ export class LiveCredentialResolver {
       credentials,
       region,
       endpoint: realtimeEndpoint,
-      clientId: `${LIVE_CLIENT_ID_PREFIX}${crypto.randomUUID()}`,
+      clientId: `${LIVE_CLIENT_ID_PREFIX}${this.randomId()}`,
       // A workspace-scoped credential may subscribe ONLY to its own tenant
       // topic, spelled out concretely; an org-scoped one may wildcard the
       // workspace segment (`+` matches the policy's `*`).

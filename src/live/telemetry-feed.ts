@@ -44,8 +44,16 @@ export interface MqttLikeClient {
 export interface TelemetryFeedDeps {
   resolver: LiveCredentialResolver;
   deviceId: string;
-  /** Test seam. Defaults to a dynamic import of mqtt.js. */
+  /**
+   * The MQTT connection factory: the platform's `mqttConnect`, or a dynamic
+   * import of mqtt.js over the global WebSocket. Also the test seam.
+   */
   connect?: (url: string, spec: MqttConnectionSpec) => Promise<MqttLikeClient>;
+  /**
+   * The platform's wake source (foreground, network back). A wake while the
+   * socket is closed or a backoff is pending reconnects NOW.
+   */
+  subscribeWake?: (onWake: () => void) => () => void;
   /** Test seam for timers/clock. */
   now?: () => number;
 }
@@ -102,6 +110,10 @@ export class TelemetryFeed {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private backoff = 1000;
   private snapshotCache: TelemetrySnapshot | null = null;
+  private unsubscribeWake: (() => void) | null = null;
+  // Generation counter: a nudge that re-opens must not let a stalled earlier
+  // open() finish later and attach a second client.
+  private openSeq = 0;
 
   constructor(deps: TelemetryFeedDeps) {
     this.deps = deps;
@@ -151,6 +163,7 @@ export class TelemetryFeed {
       return;
     }
     this.startFlush();
+    this.unsubscribeWake = this.deps.subscribeWake?.(() => this.nudge()) ?? null;
     void this.open();
   }
 
@@ -159,7 +172,25 @@ export class TelemetryFeed {
     if (this.flushTimer) clearInterval(this.flushTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.unsubscribeWake?.();
+    this.unsubscribeWake = null;
     this.client?.end(true);
+  }
+
+  /**
+   * The app is back (foreground, network returned): if the socket is closed
+   * or a backoff is pending, reconnect now instead of waiting it out. A feed
+   * that is connected or mid-connect is left alone.
+   */
+  nudge(): void {
+    if (this.stopped) return;
+    if (this.status !== "closed" && this.status !== "error") return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.backoff = 1000;
+    void this.open();
   }
 
   private startFlush(): void {
@@ -197,6 +228,7 @@ export class TelemetryFeed {
 
   private async open(): Promise<void> {
     if (this.stopped) return;
+    const seq = ++this.openSeq;
     try {
       this.setStatus("connecting");
       // Mode-specific: in first-party mode this attaches the IoT policy to the
@@ -204,20 +236,21 @@ export class TelemetryFeed {
       // identity-prefixed client id plus both topic planes; in vended mode it
       // returns an `xgl-` client id and the single tenant-scoped topic.
       const spec = await this.deps.resolver.getMqttSpec(this.deps.deviceId);
-      if (this.stopped) return;
+      if (this.stopped || seq !== this.openSeq) return;
       const url = await presignIotWssUrl(spec.endpoint, spec.region, spec.credentials);
-      if (this.stopped) return;
+      if (this.stopped || seq !== this.openSeq) return;
 
       const connect = this.deps.connect ?? connectReal;
       const next = await connect(url, spec);
-      if (this.stopped) {
+      if (this.stopped || seq !== this.openSeq) {
         next.end(true);
         return;
       }
+      this.client?.end(true);
       this.client = next;
 
       next.on("connect", () => {
-        if (this.stopped) return;
+        if (this.stopped || this.client !== next) return;
         this.backoff = 1000;
         this.setStatus("connected", null);
         for (const t of spec.topics) next.subscribe(t, { qos: 0 });
@@ -235,7 +268,7 @@ export class TelemetryFeed {
       });
 
       next.on("error", (...args: unknown[]) => {
-        if (this.stopped) return;
+        if (this.stopped || this.client !== next) return;
         const err = args[0] as Error | undefined;
         this.setStatus(
           "error",
@@ -245,7 +278,7 @@ export class TelemetryFeed {
       });
 
       next.on("close", () => {
-        if (this.stopped) return;
+        if (this.stopped || this.client !== next) return;
         this.setStatus("closed");
         this.scheduleReconnect();
       });
@@ -254,7 +287,7 @@ export class TelemetryFeed {
       if (this.refreshTimer) clearTimeout(this.refreshTimer);
       this.refreshTimer = setTimeout(() => next.end(true), REFRESH_MS);
     } catch (err) {
-      if (this.stopped) return;
+      if (this.stopped || seq !== this.openSeq) return;
       const isPending =
         err instanceof XorgateError && err.details?.pendingAuth === true;
       // "Not signed in yet" is not an error: stay `connecting` and retry.

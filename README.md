@@ -79,6 +79,27 @@ function Fleet() {
   (mqtt, the KVS and Cognito clients) sits behind a dynamic import; a page
   that only lists devices ships a few kB of this package and zero AWS code.
 
+## Platforms
+
+Everything that touches the host runtime goes through one optional
+`platform` prop on `XorgateProvider`, and every slot defaults to the browser,
+so a web app never passes it:
+
+```tsx
+<XorgateProvider auth={auth} organizationId={orgId} platform={nativePlatform()}>
+```
+
+`XorgatePlatform` has four slots: `createWebRtcPlatform` (the KVS viewer's
+WebRTC), `subscribeWake` (foreground / network-back events that nudge the
+live planes and `refetchOnFocus`), `mqttConnect` (the MQTT transport) and
+`randomId` (client-id entropy). React Native consumers install
+[`@xorgate/react-native`](https://www.npmjs.com/package/@xorgate/react-native),
+which supplies all four plus `useLiveVideo` over `RTCView` and the replay
+player over `expo-video`. Adapter authors build on `useLiveVideoSession`,
+`useReplayPlayerCore` + `attachLane`, `ReplayEngine` and
+`createWebRtcPlatform(overrides)`; the browser hooks are thin wrappers over
+the same cores.
+
 ## License
 
 MIT © Epye Labs

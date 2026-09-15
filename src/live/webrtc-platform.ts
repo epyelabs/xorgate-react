@@ -1,6 +1,17 @@
 import { XorgateError } from "@xorgate/sdk";
 import type { ResolvedLiveCredentials } from "./credential-resolver.js";
 import type { PeerConnectionLike, SignalingLike, WebRtcPlatform } from "./kvs-session.js";
+import { browserRandomId } from "../platform.js";
+
+/**
+ * The two pieces of the AWS wiring that differ per runtime. A React Native
+ * platform passes its `RTCPeerConnection` and an entropy source; the three
+ * AWS bodies (endpoints, ICE servers, signaling) are shared verbatim.
+ */
+export interface WebRtcPlatformOverrides {
+  createPeerConnection?: (iceServers: unknown[]) => PeerConnectionLike;
+  randomId?: () => string;
+}
 
 function toAwsCreds(credentials: ResolvedLiveCredentials): {
   accessKeyId: string;
@@ -18,8 +29,11 @@ function toAwsCreds(credentials: ResolvedLiveCredentials): {
  * The real AWS wiring behind the KVS viewer session. Everything here is
  * dynamically imported: a page that mounts no video never loads the KVS or
  * Cognito clients, which are the largest thing in the dependency tree.
+ *
+ * Without overrides this is the browser platform (global `RTCPeerConnection`,
+ * `crypto.randomUUID()`); `@xorgate/react-native` passes both.
  */
-export function createWebRtcPlatform(): WebRtcPlatform {
+export function createWebRtcPlatform(overrides: WebRtcPlatformOverrides = {}): WebRtcPlatform {
   return {
     async getViewerEndpoints(channelRef, region, credentials) {
       const { KinesisVideoClient, GetSignalingChannelEndpointCommand } = await import(
@@ -128,6 +142,7 @@ export function createWebRtcPlatform(): WebRtcPlatform {
     },
 
     createPeerConnection(iceServers): PeerConnectionLike {
+      if (overrides.createPeerConnection) return overrides.createPeerConnection(iceServers);
       return new RTCPeerConnection({
         iceServers: iceServers as RTCIceServer[],
         iceTransportPolicy: "all",
@@ -135,7 +150,7 @@ export function createWebRtcPlatform(): WebRtcPlatform {
     },
 
     randomId(): string {
-      return crypto.randomUUID();
+      return (overrides.randomId ?? browserRandomId)();
     },
   };
 }
