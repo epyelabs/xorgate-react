@@ -85,9 +85,15 @@ export function useLiveVideoSession(
     const unsubscribeWake = (platform.subscribeWake ?? browserSubscribeWake)(() =>
       session.nudge(),
     );
+    // A transfer re-tags the KVS channel, so this session's credentials stop
+    // matching. It does NOT fail immediately — an established WebRTC session
+    // keeps flowing and only the next reconnect gets `AccessDenied` — so cycle
+    // it deliberately rather than discovering it hours later.
+    const unsubscribeInvalidate = live.onInvalidate(() => session.rescope());
 
     return () => {
       unsubscribeWake();
+      unsubscribeInvalidate();
       session.destroy();
       setStatus("connecting");
       setError(null);

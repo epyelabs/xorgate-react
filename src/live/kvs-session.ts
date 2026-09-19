@@ -153,6 +153,28 @@ export class KvsViewerSession {
   }
 
   /**
+   * The live scope was invalidated: the device moved, so this session's
+   * credentials name a tenancy that no longer owns the KVS channel. Tear the
+   * peer connection down and open a fresh one against the next vend.
+   *
+   * Unlike {@link nudge} this runs even while CONNECTED — a still-connected
+   * session is exactly the case, since KVS authorizes on a resource tag at
+   * connect time and an established WebRTC session keeps flowing until it is
+   * cycled. It stops flowing at the next reconnect, hours later, with an
+   * `AccessDenied` nobody is watching for.
+   */
+  rescope(): void {
+    if (this.cancelled) return;
+    if (this.reconnectTimer) {
+      this.timers.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.backoff = BACKOFF_MIN_MS;
+    this.teardown();
+    void this.open();
+  }
+
+  /**
    * Mobile browsers freeze background tabs; the peer connection is usually
    * dead by the time the user returns. Skip any stale backoff and reconnect
    * now unless already connected.

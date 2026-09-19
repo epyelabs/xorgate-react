@@ -78,6 +78,81 @@ function makeFeed(options: {
 }
 
 describe("TelemetryFeed", () => {
+  it("re-opens on a live-scope invalidation, even while CONNECTED", async () => {
+    // The whole point: a transferred device leaves the socket connected and
+    // subscribed to a topic nothing will ever publish to again. There is no
+    // error to react to, so the resolver has to say so out of band.
+    let listener: (() => void) | null = null;
+    let topics = ["xorgate/orgs/org-1/ws/ws-1/devices/dev-1/telemetry"];
+    const resolver = stubResolver({
+      getMqttSpec: async () => ({ ...SPEC, topics }),
+      onInvalidate: (cb: () => void) => {
+        listener = cb;
+        return () => {
+          listener = null;
+        };
+      },
+    });
+
+    const clients: FakeMqtt[] = [];
+    const feed = new TelemetryFeed({
+      resolver,
+      deviceId: "dev-1",
+      connect: async () => {
+        const c = new FakeMqtt();
+        clients.push(c);
+        return c;
+      },
+    });
+    feed.start();
+    await settle(() => clients.length === 1);
+    clients[0]!.emit("connect");
+    expect(feed.snapshot().status).toBe("connected");
+
+    topics = ["xorgate/orgs/org-1/ws/ws-2/devices/dev-1/telemetry"];
+    listener!();
+    await settle(() => clients.length === 2);
+    clients[1]!.emit("connect");
+
+    expect(clients[0]!.ended).toBe(true);
+    // Exactly ONE replacement socket: the `close` fired by ending the old
+    // client must not also schedule a reconnect on top of the deliberate one.
+    expect(clients.length).toBe(2);
+    expect(clients[1]!.subscriptions).toEqual([
+      "xorgate/orgs/org-1/ws/ws-2/devices/dev-1/telemetry",
+    ]);
+    feed.stop();
+  });
+
+  it("unsubscribes from the resolver when it stops", async () => {
+    let listeners = 0;
+    const resolver = stubResolver({
+      onInvalidate: () => {
+        listeners++;
+        return () => {
+          listeners--;
+        };
+      },
+    });
+    const feed = new TelemetryFeed({
+      resolver,
+      deviceId: "dev-1",
+      connect: async () => new FakeMqtt(),
+    });
+    feed.start();
+    expect(listeners).toBe(1);
+    feed.stop();
+    expect(listeners).toBe(0);
+  });
+
+  it("a resolver without onInvalidate still starts (older resolver, test stub)", async () => {
+    const { feed, mqtt } = makeFeed();
+    feed.start();
+    await settle(() => mqtt() !== null);
+    expect(feed.snapshot().status).not.toBe("error");
+    feed.stop();
+  });
+
   it("connects, subscribes to the resolver's topics, and reports connected", async () => {
     const { feed, mqtt } = makeFeed();
     feed.start();

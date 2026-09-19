@@ -43,6 +43,8 @@ import {
   useTelemetryHistory,
   useTelemetryLatest,
   useXorgate,
+  useDeviceScope,
+  useLiveScope,
   type Device,
   type VideoChannel,
   type LatestByMetric,
@@ -78,6 +80,7 @@ declare const idToken: string;
 declare const organizationId: string | null;
 declare const workspaceId: string | undefined;
 declare const deviceId: string;
+declare const otherWorkspaceId: string;
 declare const element: HTMLElement;
 declare const from: Date;
 declare const to: Date;
@@ -880,6 +883,48 @@ export function ConfigWrite() {
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// Live scope: a device can be transferred out from under an open viewer
+// ---------------------------------------------------------------------------
+
+/**
+ * Gate the live hooks on the scope guard. Without this a transferred device
+ * produces an empty telemetry feed and nothing else — no error, no status
+ * change, indistinguishable from an idle device.
+ */
+export function GuardedLive() {
+  const scope = useDeviceScope(deviceId);
+  const live = useLiveTelemetry(scope.outOfScope ? null : deviceId);
+
+  if (scope.error) return <p role="alert">{scope.error.message}</p>;
+  return <p>{live.status}</p>;
+}
+
+/** Invalidate the live scope yourself after moving a device. */
+export function TransferButton() {
+  const xg = useXorgate();
+  const { invalidate } = useLiveScope();
+  return (
+    <button
+      onClick={async () => {
+        await xg.devices.transfer(deviceId, { workspaceId: otherWorkspaceId });
+        // Every open live consumer re-resolves NOW instead of holding the old
+        // scope for up to ~50 minutes.
+        invalidate();
+      }}
+    >
+      Transfer
+    </button>
+  );
+}
+
+/** What the live credential is scoped to, which is not the provider's props. */
+export function ScopeBadge() {
+  const { organizationId, workspaceId } = useLiveScope();
+  return <span>{workspaceId ?? organizationId ?? "unscoped"}</span>;
+}
+
 // Keep every declaration reachable so nothing above is dead weight.
 export const _used = [
   IndexApp,
@@ -913,4 +958,7 @@ export const _used = [
   Scrubber,
   ReplayTelemetryDestructure,
   ReplayVideoUsage,
+  GuardedLive,
+  TransferButton,
+  ScopeBadge,
 ];

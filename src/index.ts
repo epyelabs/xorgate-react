@@ -8,6 +8,9 @@
 // ---------------------------------------------------------------------------
 
 export type {
+  AcceptedTransferOffer,
+  BulkTransferItem,
+  CreatedTransferOffer,
   Device,
   DeviceModel,
   VideoChannel,
@@ -26,6 +29,18 @@ export type {
   StreamKey,
   TelemetryHistory,
   TelemetryReading,
+  TransferAdoption,
+  TransferBlocker,
+  TransferBlockerCode,
+  TransferDeviceInput,
+  TransferOffer,
+  TransferOfferPreview,
+  TransferOfferStatus,
+  TransferPreview,
+  TransferResult,
+  TransferSummary,
+  TransferTenancy,
+  ScopeAttributeResult,
   Workspace,
   XorgateClient,
 } from "@xorgate/sdk";
@@ -57,6 +72,18 @@ export { useLivePlane } from "./live/use-live-plane.js";
 export { useLiveCredentials } from "./live/use-live-credentials.js";
 
 // ---------------------------------------------------------------------------
+// Live scope: the tenancy the LIVE plane is in, and what to do when it moves
+// ---------------------------------------------------------------------------
+
+export { useLiveScope, type UseLiveScope } from "./live/use-live-scope.js";
+export {
+  useDeviceScope,
+  type UseDeviceScope,
+  type UseDeviceScopeOptions,
+  type DeviceScopeStatus,
+} from "./live/use-device-scope.js";
+
+// ---------------------------------------------------------------------------
 // The platform slot (0.2.0): host-runtime adapters, browser by default
 // ---------------------------------------------------------------------------
 
@@ -79,6 +106,7 @@ export type {
   TelemetryFeedDeps,
 } from "./live/telemetry-feed.js";
 export type {
+  LiveScope,
   MqttConnectionSpec,
   ResolvedLiveCredentials,
 } from "./live/credential-resolver.js";

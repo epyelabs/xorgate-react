@@ -82,6 +82,13 @@ function Fleet() {
 - **A small bundle for pages that need none of that.** Every live dependency
   (mqtt, the KVS and Cognito clients) sits behind a dynamic import; a page
   that only lists devices ships a few kB of this package and zero AWS code.
+- **A live plane that notices when the device moves.** A vended credential
+  encodes org + workspace and is cached for up to ~50 minutes, so a device
+  transferred to another workspace leaves a viewer connected to a topic nothing
+  will publish to again — silence, no error. `useDeviceScope(deviceId)` turns
+  that into a typed `DEVICE_OUT_OF_SCOPE`, re-vending once first since the usual
+  cause is just a stale credential, and `useLiveScope().invalidate()` makes every
+  open live consumer re-resolve after you transfer a device yourself.
 
 ## Platforms
 

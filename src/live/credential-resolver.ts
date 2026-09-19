@@ -35,6 +35,20 @@ export interface VideoCredentialSpec {
   region: string | undefined;
 }
 
+/**
+ * The tenancy the CURRENT live credential was vended for, as opposed to the
+ * tenancy the provider was rendered with.
+ *
+ * `workspaceId` is null for an organization-scoped credential (it may reach
+ * every workspace in its organization) and for a credential that has not been
+ * vended yet. In first-party Cognito mode both fields fall back to the
+ * provider's props, because there is no vend response to learn from.
+ */
+export interface LiveScope {
+  organizationId: string | null;
+  workspaceId: string | null;
+}
+
 interface ResolverDeps {
   getAuth: () => XorgateAuth;
   getConfig: () => XorgateConfig & { baseUrl: string };
@@ -75,7 +89,9 @@ export class LiveCredentialResolver {
     defineHidden(this, "inflight", null);
     // Scope learned from a vend response. Provider tenancy is only a fallback,
     // read live so a tenancy change is seen without recreating the resolver.
-    defineHidden(this, "scope", { organizationId: null, workspaceId: null });
+    // Named `vendScope` rather than `scope` because a hidden OWN property would
+    // shadow the prototype's `scope()` method and make it uncallable.
+    defineHidden(this, "vendScope", { organizationId: null, workspaceId: null });
   }
 
   toJSON(): { mode: Mode } {
@@ -129,11 +145,112 @@ export class LiveCredentialResolver {
   dispose(): void {
     setHidden(this, "cache", null);
     setHidden(this, "inflight", null);
+    getHidden<Set<() => void> | undefined>(this, "listeners")?.clear();
   }
 
-  /** Force the next resolve to mint fresh credentials. */
+  /**
+   * Force the next resolve to mint fresh credentials, keeping everything
+   * learned about the tenancy.
+   *
+   * This is the EXPIRY path — the KVS session cycles credentials on a timer
+   * with it — and it deliberately notifies nobody. Use
+   * {@link invalidateScope} when the device's tenancy itself has changed.
+   */
   invalidate(): void {
     setHidden(this, "cache", null);
+  }
+
+  /**
+   * The device moved. Drop the credential AND everything learned from the last
+   * vend, then tell every live consumer to re-resolve now.
+   *
+   * A vended live credential encodes org + workspace in its session policy and
+   * is cached here until ~5 minutes before expiry, so without this a viewer
+   * keeps a stale scope for up to about 50 minutes after a transfer. Telemetry
+   * goes SILENT (the subscription names a topic the device no longer publishes
+   * on) and video starts failing `AccessDenied` once the KVS channel is
+   * re-tagged — neither of which looks like an error.
+   *
+   * Call it after transferring a device, or after accepting a transfer offer.
+   * `useLiveScope().invalidate()` is the hook form.
+   *
+   * Note that this is invisible in `console.xorgate.io`, which subscribes to
+   * BOTH telemetry planes with wildcards and therefore renders a device
+   * whatever tenancy it publishes under. Only a workspace-scoped vended
+   * credential — the third-party path — actually exercises it.
+   */
+  invalidateScope(): void {
+    setHidden(this, "cache", null);
+    setHidden(this, "vendScope", { organizationId: null, workspaceId: null });
+    setHidden(this, "vendCoords", undefined);
+    const listeners = getHidden<Set<() => void> | undefined>(this, "listeners");
+    for (const cb of listeners ? [...listeners] : []) {
+      try {
+        cb();
+      } catch {
+        /* one consumer's failure must not stop the others being told */
+      }
+    }
+  }
+
+  /**
+   * Be told when {@link invalidateScope} runs, so a live consumer can re-open
+   * against the new tenancy instead of sitting on a socket that will never
+   * receive anything again. Returns an unsubscribe function.
+   */
+  onInvalidate(cb: () => void): () => void {
+    let listeners = getHidden<Set<() => void> | undefined>(this, "listeners");
+    if (!listeners) {
+      listeners = new Set();
+      setHidden(this, "listeners", listeners);
+    }
+    listeners.add(cb);
+    return () => {
+      listeners.delete(cb);
+    };
+  }
+
+  /**
+   * The tenancy the current credential was vended for, falling back to the
+   * provider's props where nothing has been learned. Never carries a secret.
+   */
+  scope(): LiveScope {
+    const learned = getHidden<{ organizationId: string | null; workspaceId: string | null }>(
+      this,
+      "vendScope",
+    );
+    const tenancy = this.d.getTenancy();
+    return {
+      organizationId: learned.organizationId ?? tenancy.organizationId ?? null,
+      workspaceId: learned.workspaceId ?? tenancy.workspaceId ?? null,
+    };
+  }
+
+  /**
+   * Can this credential reach a device sitting in `workspaceId`?
+   *
+   * `null` means "cannot tell", and it is a real answer rather than a hedge.
+   * Three things produce it, and none of them is a problem:
+   *
+   * - **First-party (Cognito) and unauthenticated modes.** Those credentials
+   *   are not workspace-scoped at all — the first-party console subscribes to
+   *   both telemetry planes with wildcards — so there is nothing to compare.
+   *   The provider's `workspaceId` prop is a UI filter, not a credential scope,
+   *   and comparing against it would invent false alarms.
+   * - **Nothing vended yet.** Resolve credentials first.
+   * - **An organization-scoped vended credential.** It may reach every
+   *   workspace in its organization and this resolver does not know which those
+   *   are, so a workspace id alone cannot settle it. (A CROSS-ORGANIZATION move
+   *   is still caught, by the REST read answering 404.)
+   *
+   * Only `false` is evidence of a stale scope.
+   */
+  coversWorkspace(workspaceId: string): boolean | null {
+    const mode = this.mode();
+    if (mode !== "vended-direct" && mode !== "vended-token") return null;
+    const learned = getHidden<{ workspaceId: string | null }>(this, "vendScope");
+    if (learned.workspaceId === null) return null;
+    return learned.workspaceId === workspaceId;
   }
 
   /**
@@ -187,7 +304,7 @@ export class LiveCredentialResolver {
 
   /** Org/workspace scope and live coordinates learned from a vend response. */
   private adoptVendScope(raw: LiveCredentials): void {
-    const scope = getHidden<{ organizationId: string | null; workspaceId: string | null }>(this, "scope");
+    const scope = getHidden<{ organizationId: string | null; workspaceId: string | null }>(this, "vendScope");
     if (typeof raw.organizationId === "string") scope.organizationId = raw.organizationId;
     if (raw.workspaceId !== undefined) scope.workspaceId = raw.workspaceId;
     if (raw.live) setHidden(this, "vendCoords", raw.live);
@@ -347,7 +464,7 @@ export class LiveCredentialResolver {
           "config.realtimeEndpoint.",
       });
     }
-    const scope = getHidden<{ organizationId: string | null; workspaceId: string | null }>(this, "scope");
+    const scope = getHidden<{ organizationId: string | null; workspaceId: string | null }>(this, "vendScope");
     const tenancy = this.d.getTenancy();
     const organizationId = scope.organizationId ?? tenancy.organizationId;
     const workspaceId = scope.workspaceId ?? tenancy.workspaceId ?? null;

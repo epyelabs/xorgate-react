@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.3.0
+
+Live scope. The device your viewer is watching can be transferred to another
+workspace or organization while the viewer is open, and until now **nothing
+told it**. This release is the fix, plus a re-export of the transfer vocabulary
+from `@xorgate/sdk` 0.7.0.
+
+### The problem, stated plainly
+
+A vended live credential encodes org + workspace in its session policy, and this
+package caches it until about five minutes before expiry — up to roughly **50
+minutes**. Inside that window a transfer produces no error of any kind:
+
+- **Telemetry goes silent.** The subscription names
+  `xorgate/orgs/{org}/ws/{ws}/devices/{id}/telemetry` with the old ids spelled
+  out concretely; the device now publishes under different ones. The socket
+  stays `connected` and no frame ever arrives, which is indistinguishable from
+  an idle device.
+- **Video keeps working, then stops.** KVS authorizes on a resource tag with no
+  MQTT session involved, so an established session flows until it is cycled and
+  the next connect gets `AccessDenied`.
+
+This is invisible from `console.xorgate.io`, which subscribes to **both**
+telemetry planes with wildcards and therefore renders a transferred device
+perfectly. Only a workspace-scoped consumer sees it — which is exactly who saw
+it on 2026-09-18.
+
+### Added
+
+- **`useLiveScope()`** — the tenancy the LIVE credential was vended for (not the
+  provider's props, which is what `useXorgateTenancy()` reports), plus
+  `invalidate()`. Call `invalidate()` after `devices.transfer()` or
+  `transferOffers.accept()`: it drops the credential, forgets the learned scope,
+  and makes every live consumer re-resolve immediately.
+
+- **`useDeviceScope(deviceId)`** — turns the silence into a typed error. It
+  reads the device over REST and compares its `workspaceId` against the live
+  credential's scope. A mismatch **re-vends once** (the ordinary cause is just a
+  stale cached credential) and only then fails loudly with
+  `DEVICE_OUT_OF_SCOPE`. A device the REST plane 404s is out of scope too: it
+  moved to another organization.
+
+  ```tsx
+  const scope = useDeviceScope(deviceId)
+  const live = useLiveTelemetry(scope.outOfScope ? null : deviceId)
+  if (scope.error) return <Banner>{scope.error.message}</Banner>
+  ```
+
+  Its fourth status, `"unknown"`, is a real answer and never a problem signal:
+  a first-party Cognito session and an organization-scoped credential are not
+  workspace-scoped at all, so there is nothing to compare.
+
+- **`LiveScope`** type, and the transfer vocabulary re-exported from
+  `@xorgate/sdk` (`TransferSummary`, `TransferPreview`, `TransferOffer`,
+  `TransferOfferPreview`, `TransferAdoption`, `ScopeAttributeResult` and the
+  rest), so a component and a server route pass the same objects around.
+
+### Changed
+
+- **The live hooks now re-open when the scope is invalidated.** Previously
+  `invalidate()` existed on the resolver and **nothing called it on a tenancy
+  change**, and even calling it would not have reconnected an already-open
+  socket. `useLiveTelemetry` now drops and re-opens its MQTT connection, and
+  `useLiveVideoSession` cycles its peer connection, when `useLiveScope()
+  .invalidate()` runs. Both do so from ANY state including `connected`, because
+  connected-but-wrong is precisely the case.
+
+  This is a behaviour change for anyone who was tolerating a blank feed after a
+  transfer: they now get a reconnect, and with `useDeviceScope` mounted, an
+  error instead of nothing.
+
+- **`LiveCredentialResolver.invalidate()` is unchanged and still notifies
+  nobody** — it is the expiry path, and the KVS session cycles credentials with
+  it on a timer. The new `invalidateScope()` is the tenancy path. Keeping them
+  separate stops video's 50-minute credential cycle from bouncing the telemetry
+  socket.
+
+- Requires `@xorgate/sdk` `^0.7.0`.
+
 ## 0.2.1
 
 Types only. No runtime change: `dist/index.js` is byte-identical to 0.2.0 and

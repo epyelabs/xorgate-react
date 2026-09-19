@@ -111,6 +111,7 @@ export class TelemetryFeed {
   private backoff = 1000;
   private snapshotCache: TelemetrySnapshot | null = null;
   private unsubscribeWake: (() => void) | null = null;
+  private unsubscribeInvalidate: (() => void) | null = null;
   // Generation counter: a nudge that re-opens must not let a stalled earlier
   // open() finish later and attach a second client.
   private openSeq = 0;
@@ -164,6 +165,14 @@ export class TelemetryFeed {
     }
     this.startFlush();
     this.unsubscribeWake = this.deps.subscribeWake?.(() => this.nudge()) ?? null;
+    // A tenancy change (a transfer) makes the CURRENT subscription useless in a
+    // way that produces no error at all: the socket stays connected and the
+    // device simply publishes somewhere this credential may not look. Re-open
+    // as soon as the resolver is told, instead of waiting out the ~50 minute
+    // credential cycle. `onInvalidate` is optional so a test stub or an older
+    // resolver can omit it.
+    this.unsubscribeInvalidate =
+      this.deps.resolver.onInvalidate?.(() => this.rescope()) ?? null;
     void this.open();
   }
 
@@ -174,7 +183,32 @@ export class TelemetryFeed {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.unsubscribeWake?.();
     this.unsubscribeWake = null;
+    this.unsubscribeInvalidate?.();
+    this.unsubscribeInvalidate = null;
     this.client?.end(true);
+  }
+
+  /**
+   * The live scope was invalidated: drop this socket and open a new one against
+   * whatever the next vend says. Unlike {@link nudge} this runs from ANY state,
+   * including `connected` — a connected-but-wrong subscription is exactly the
+   * case this exists for, and it is indistinguishable from an idle device
+   * without doing it.
+   */
+  rescope(): void {
+    if (this.stopped) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.backoff = 1000;
+    // Detach before ending: the `close` handler would otherwise schedule a
+    // second reconnect on top of the open() below.
+    const previous = this.client;
+    this.client = null;
+    previous?.end(true);
+    this.setStatus("connecting", null);
+    void this.open();
   }
 
   /**
