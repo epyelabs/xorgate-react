@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.1
+
+### Fixed
+
+- **`invalidateScope()` now discards a vend that was already IN FLIGHT**, and
+  not just the cached credential. `getCredentials()` hands back a pending
+  `inflight` promise before it considers minting, so a vend issued moments
+  before a tenancy change was adopted as the NEW tenancy's credential and
+  cached for its full ~55-minute lifetime. Live video then failed
+  `kinesisvideo:GetSignalingChannelEndpoint` with `AccessDenied` against a
+  channel in the organization the user had just switched TO, and telemetry went
+  silent, until the credential expired.
+
+  Dropping `inflight` alone would not have been enough: the orphaned vend's
+  continuations still wrote `cache`, and `adoptVendScope` still wrote the
+  learned scope. Both are now guarded by a generation counter that
+  `invalidateScope()` bumps, so a vend issued before the switch can no longer
+  land anywhere after it. Callers already awaiting that promise still receive
+  it — they asked before the switch — it simply is not retained.
+
+  Reproduced on hardware (iOS and Android) on 2026-09-21 by switching
+  organizations while a vend was in flight; covered by
+  `test/live-scope.test.ts`.
+
 ## 0.3.0
 
 Live scope. The device your viewer is watching can be transferred to another

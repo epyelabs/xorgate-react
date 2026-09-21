@@ -92,6 +92,11 @@ export class LiveCredentialResolver {
     // Named `vendScope` rather than `scope` because a hidden OWN property would
     // shadow the prototype's `scope()` method and make it uncallable.
     defineHidden(this, "vendScope", { organizationId: null, workspaceId: null });
+    // Bumped by `invalidateScope()`. A vend that was already in flight when the
+    // tenancy changed belongs to the OLD tenant, so its result must not land in
+    // the cache or the learned scope; the generation it was issued under is how
+    // its continuations know to drop it.
+    defineHidden(this, "gen", 0);
   }
 
   toJSON(): { mode: Mode } {
@@ -181,6 +186,15 @@ export class LiveCredentialResolver {
    */
   invalidateScope(): void {
     setHidden(this, "cache", null);
+    // Dropping the CACHE is not enough: `getCredentials()` hands back a pending
+    // `inflight` promise before it considers minting, so a vend issued for the
+    // tenant we are leaving would otherwise be adopted as the new tenant's
+    // credential and cached for its whole lifetime. That is the defect behind
+    // "switch organizations, then live video fails AccessDenied for an hour".
+    // The generation bump is what stops the orphaned vend's continuation
+    // writing `cache`/`vendScope` when it eventually resolves.
+    setHidden(this, "gen", getHidden<number>(this, "gen") + 1);
+    setHidden(this, "inflight", null);
     setHidden(this, "vendScope", { organizationId: null, workspaceId: null });
     setHidden(this, "vendCoords", undefined);
     const listeners = getHidden<Set<() => void> | undefined>(this, "listeners");
@@ -266,14 +280,21 @@ export class LiveCredentialResolver {
     const inflight = getHidden<Promise<ResolvedLiveCredentials> | null>(this, "inflight");
     if (inflight) return inflight;
 
-    const run = this.mint(options).then(
+    const gen = getHidden<number>(this, "gen");
+    const current = (): boolean => getHidden<number>(this, "gen") === gen;
+    const run = this.mint(options, gen).then(
       (creds) => {
-        setHidden(this, "cache", creds);
-        setHidden(this, "inflight", null);
+        // A scope invalidation while this was in flight makes it the previous
+        // tenant's credential. Return it to whoever is awaiting this promise
+        // (they asked before the switch) but never cache it.
+        if (current()) {
+          setHidden(this, "cache", creds);
+          setHidden(this, "inflight", null);
+        }
         return creds;
       },
       (err) => {
-        setHidden(this, "inflight", null);
+        if (current()) setHidden(this, "inflight", null);
         throw err;
       },
     );
@@ -281,16 +302,19 @@ export class LiveCredentialResolver {
     return run;
   }
 
-  private async mint(options: { signal?: AbortSignal }): Promise<ResolvedLiveCredentials> {
+  private async mint(
+    options: { signal?: AbortSignal },
+    gen: number,
+  ): Promise<ResolvedLiveCredentials> {
     const mode = this.mode();
     if (mode === "vended-direct") {
       const raw = await this.d.getAuth().getLiveCredentials!(options);
-      this.adoptVendScope(raw);
+      this.adoptVendScope(raw, gen);
       return normalize(raw);
     }
     if (mode === "vended-token") {
       const raw = await this.vendWithToken(options);
-      this.adoptVendScope(raw);
+      this.adoptVendScope(raw, gen);
       return normalize(raw);
     }
     if (mode === "cognito") {
@@ -303,7 +327,9 @@ export class LiveCredentialResolver {
   }
 
   /** Org/workspace scope and live coordinates learned from a vend response. */
-  private adoptVendScope(raw: LiveCredentials): void {
+  private adoptVendScope(raw: LiveCredentials, gen: number): void {
+    // Issued before a scope invalidation: this describes the tenant we left.
+    if (getHidden<number>(this, "gen") !== gen) return;
     const scope = getHidden<{ organizationId: string | null; workspaceId: string | null }>(this, "vendScope");
     if (typeof raw.organizationId === "string") scope.organizationId = raw.organizationId;
     if (raw.workspaceId !== undefined) scope.workspaceId = raw.workspaceId;
