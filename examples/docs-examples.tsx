@@ -564,6 +564,27 @@ function ReplayTelemetryDestructure({ player }: { player: UseReplayPlayer }) {
   void [latest, position, routeLines, traveledLines, hasGps];
 }
 
+// Session artifacts: when the manifest carries its `telemetry` block the hook
+// reads presigned S3 objects and never calls REST. The block also carries each
+// telemetry session's insights, so the header prints distance and duration
+// with no second call.
+function ReplayTelemetrySource({ player }: { player: UseReplayPlayer }) {
+  const telemetry = useReplayTelemetry(deviceId, player);
+  const sessions = player.telemetry?.sessions ?? [];
+  const meters = sessions.reduce((sum, s) => {
+    const d = s.insights?.distance?.meters;
+    return sum + (typeof d === "number" ? d : 0);
+  }, 0);
+  const unsynced = sessions.some((s) => s.timeSource === "unsynced");
+  return (
+    <p>
+      {telemetry.source === "artifacts" ? "from artifacts" : "from the API"}
+      {sessions.length > 0 ? ` · ${(meters / 1000).toFixed(1)} km` : null}
+      {unsynced ? " · clock unsynced" : null}
+    </p>
+  );
+}
+
 function ReplayVideoUsage({ player }: { player: UseReplayPlayer }) {
   return <ReplayVideo player={player} streamKey="cam0" className="lane" />;
 }
@@ -957,6 +978,7 @@ export const _used = [
   ImperativeSubscribe,
   Scrubber,
   ReplayTelemetryDestructure,
+  ReplayTelemetrySource,
   ReplayVideoUsage,
   GuardedLive,
   TransferButton,

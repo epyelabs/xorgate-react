@@ -1,13 +1,26 @@
-// End-to-end suite: drives the BUILT package (dist/) in headless Chromium
-// against PRODUCTION, in the proxied-consumer shape (the harness server holds
-// the key). Three scenarios: live telemetry, live video, and the Sessions
-// acceptance test — video and telemetry replaying on one synced timeline,
-// where scrub, seek and pause keep both streams aligned.
+// End-to-end suite: drives the BUILT package (dist/) in headless Chromium in
+// the proxied-consumer shape (the harness server holds the credential).
+// Three scenarios: live telemetry, live video, and the Sessions acceptance
+// test — video and telemetry replaying on one synced timeline, where scrub,
+// seek and pause keep both streams aligned. The Sessions test runs TWICE:
+// with the manifest's `telemetry` block (artifact mode: the page must issue
+// no `/telemetry?` request) and with `telemetry=0` (the REST fallback).
 //
-// Credentials come from a gitignored .env (see .env.example). Unconfigured,
-// the suite SKIPS — unless XORGATE_REQUIRE_E2E=1, under which missing
-// credentials FAIL: a green run that tested nothing is the state everyone
-// stops looking at (the lesson Phase 1 paid for).
+// Credentials come from a gitignored .env (see .env.example), overlaid with
+// any XORGATE_* variable in the process environment. CI runs this against
+// PRODUCTION with the integration key. Against a stage with no API key at
+// hand, `XORGATE_AUTH_MODE=browser-login` logs into the web console through
+// its real form (XORGATE_LOGIN_URL / _EMAIL / _PASSWORD) and uses the app's
+// own session token, held in memory only, never printed, never written.
+//
+// Unconfigured, the suite SKIPS — unless XORGATE_REQUIRE_E2E=1, under which
+// missing credentials FAIL: a green run that tested nothing is the state
+// everyone stops looking at (the lesson Phase 1 paid for).
+//
+// XORGATE_E2E_ONLY=replay (comma list of live-telemetry, live-video, replay)
+// restricts the run; XORGATE_TEST_SESSION_ID pins the replay session;
+// XORGATE_E2E_MIN_ROUTE_POINTS (default 0) is the route-line floor asserted
+// in artifact mode (a stationary bench device records no route).
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -20,18 +33,23 @@ const repo = path.join(root, "..");
 const envPath = process.env.XORGATE_ENV_FILE ?? path.join(repo, ".env");
 const require_ = process.env.XORGATE_REQUIRE_E2E === "1";
 
-if (!existsSync(envPath)) {
+let env;
+try {
+  env = loadEnv(envPath);
+} catch (err) {
   if (require_) {
-    console.error(`XORGATE_REQUIRE_E2E=1 but ${envPath} is missing`);
+    console.error(`XORGATE_REQUIRE_E2E=1 but the suite is unconfigured: ${err.message}`);
     process.exit(1);
   }
-  console.log(`e2e SKIPPED: no ${envPath}. Copy .env.example and fill it in.`);
+  console.log(`e2e SKIPPED: ${err.message}. Copy .env.example to .env and fill it in.`);
   process.exit(0);
 }
-const env = loadEnv(envPath);
 const DEVICE = env.XORGATE_TEST_DEVICE_ID;
 const WORKSPACE = env.XORGATE_TEST_WORKSPACE_ID;
-if (!DEVICE || !WORKSPACE) {
+const BROWSER_LOGIN = env.XORGATE_AUTH_MODE === "browser-login";
+const ONLY = new Set((env.XORGATE_E2E_ONLY ?? "live-telemetry,live-video,replay").split(","));
+const MIN_ROUTE_POINTS = Number(env.XORGATE_E2E_MIN_ROUTE_POINTS ?? 0);
+if (!DEVICE || (!WORKSPACE && (ONLY.has("live-telemetry") || ONLY.has("live-video")))) {
   const msg = "e2e needs XORGATE_TEST_DEVICE_ID and XORGATE_TEST_WORKSPACE_ID";
   if (require_) {
     console.error(msg);
@@ -39,6 +57,13 @@ if (!DEVICE || !WORKSPACE) {
   }
   console.log(`e2e SKIPPED: ${msg}`);
   process.exit(0);
+}
+if (BROWSER_LOGIN) {
+  const missing = ["XORGATE_LOGIN_URL", "XORGATE_LOGIN_EMAIL", "XORGATE_LOGIN_PASSWORD"].filter((k) => !env[k]);
+  if (missing.length) {
+    console.error(`browser-login needs ${missing.join(", ")} in the environment`);
+    process.exit(1);
+  }
 }
 const BASE_URL = env.XORGATE_API_URL ?? "https://api.xorgate.io";
 
@@ -91,6 +116,42 @@ async function waitState(page, predicate, timeoutMs, label) {
 
 const snap = (page) => page.evaluate(() => window.__STATE);
 
+const browser = await chromium.launch({ headless: true });
+
+// --- credential -------------------------------------------------------------
+// In browser-login mode the session token lives in this closure and nowhere
+// else: not in `env`, not in a file, not in any log line.
+let sessionToken = null;
+if (BROWSER_LOGIN) {
+  console.log(`\n[auth] browser login at ${env.XORGATE_LOGIN_URL}`);
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const captured = new Promise((resolve) => {
+    page.on("request", (req) => {
+      if (!req.url().includes("/v1/")) return;
+      const auth = req.headers()["authorization"];
+      if (auth && auth.startsWith("Bearer ")) resolve(auth.slice("Bearer ".length));
+    });
+  });
+  await page.goto(env.XORGATE_LOGIN_URL, { waitUntil: "domcontentloaded" });
+  await page.fill("#email", env.XORGATE_LOGIN_EMAIL);
+  await page.fill("#password", env.XORGATE_LOGIN_PASSWORD);
+  await page.keyboard.press("Enter");
+  sessionToken = await Promise.race([
+    captured,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("no /v1/ request within 60 s")), 60_000)),
+  ]).catch((err) => {
+    console.error(`  login failed: ${err.message}`);
+    return null;
+  });
+  await ctx.close();
+  if (!sessionToken) {
+    await browser.close();
+    process.exit(1);
+  }
+  console.log("  ok   session token captured (in memory)");
+}
+
 // --- run -------------------------------------------------------------------
 const server = await startServer({
   env,
@@ -98,21 +159,21 @@ const server = await startServer({
   workspaceId: WORKSPACE,
   bundle: () => bundle,
   testConfig: () => config,
+  authorization: () => sessionToken ?? env.XORGATE_API_KEY,
 });
 let config = null;
 
-const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.error("  pageerror:", String(e).slice(0, 300)));
 
 // ===========================================================================
 // 1. Live telemetry through the package, vended credentials
 // ===========================================================================
-currentTest = "live-telemetry";
-console.log("\n[1/3] live telemetry (vended credentials, tenant-scoped topic)");
-config = { test: "live-telemetry", deviceId: DEVICE, organizationId: env.XORGATE_ORG_ID };
-await page.goto(server.url);
-{
+if (ONLY.has("live-telemetry")) {
+  currentTest = "live-telemetry";
+  console.log("\n[1/3] live telemetry (vended credentials, tenant-scoped topic)");
+  config = { test: "live-telemetry", deviceId: DEVICE, organizationId: env.XORGATE_ORG_ID };
+  await page.goto(server.url);
   const connected = await waitState(
     page,
     () => window.__STATE.status === "connected",
@@ -146,9 +207,9 @@ await page.goto(server.url);
 // ===========================================================================
 // 2. Live video through the package
 // ===========================================================================
-currentTest = "live-video";
-console.log("\n[2/3] live video (KVS WebRTC viewer, vended credentials)");
-{
+if (ONLY.has("live-video")) {
+  currentTest = "live-video";
+  console.log("\n[2/3] live video (KVS WebRTC viewer, vended credentials)");
   const { channels } = await server.api(`/devices/${DEVICE}/video-channels`);
   const cam0 = channels.find((c) => c.streamKey === "cam0");
   config = { test: "live-video", deviceId: DEVICE, organizationId: env.XORGATE_ORG_ID, channel: cam0 };
@@ -178,26 +239,43 @@ console.log("\n[2/3] live video (KVS WebRTC viewer, vended credentials)");
 // ===========================================================================
 // 3. THE SESSIONS ACCEPTANCE TEST: synced replay of a real recorded session
 // ===========================================================================
-currentTest = "replay";
-console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
-{
-  const sessions = await server.api(`/devices/${DEVICE}/sessions?limit=1`);
-  const sessionId = sessions.sessions[0].id;
-  const manifestBody = await server.api(
-    `/devices/${DEVICE}/replay-manifest?sessionId=${sessionId}`,
-  );
-  const manifest = manifestBody.replay ?? manifestBody;
-  console.log(
-    `  session ${sessionId} — ${manifest.sessions[0].segments.length} segments, ` +
-      `${Math.round((manifest.to - manifest.from) / 60000)} min`,
-  );
+// Request accounting for one page visit: what the PAGE fetched, by kind.
+function trackRequests(page) {
+  const seen = { telemetryApi: 0, artifactGets: [], other: 0 };
+  const onRequest = (req) => {
+    const u = req.url();
+    if (u.includes("/telemetry?")) seen.telemetryApi++;
+    else if (u.includes("/telemetry/v1/")) seen.artifactGets.push({ url: u.slice(0, u.indexOf("?")), bytes: null });
+    else seen.other++;
+  };
+  const onResponse = async (res) => {
+    const u = res.url();
+    if (!u.includes("/telemetry/v1/")) return;
+    const key = u.slice(0, u.indexOf("?"));
+    const entry = seen.artifactGets.find((e) => e.url === key && e.bytes === null);
+    if (entry) entry.bytes = Number(res.headers()["content-length"] ?? 0) || null;
+  };
+  page.on("request", onRequest);
+  page.on("response", onResponse);
+  return {
+    seen,
+    stop: () => {
+      page.off("request", onRequest);
+      page.off("response", onResponse);
+    },
+  };
+}
+
+async function replayAcceptance(page, { label, manifest, expectSource, metrics }) {
+  currentTest = `replay-${label}`;
   config = {
     test: "replay",
     deviceId: DEVICE,
     organizationId: env.XORGATE_ORG_ID,
     manifest,
-    metrics: ["gps.lat", "gps.lon", "gps.speed", "system.cpu_temp", "system.cpu_usage"],
+    metrics,
   };
+  const tracker = trackRequests(page);
   await page.goto(server.url);
 
   const laneReady = await waitState(
@@ -209,7 +287,7 @@ console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
   assert(laneReady, "MSE lane decodes its first frame");
   await page
     .locator("video")
-    .screenshot({ path: path.join(artifacts, "replay-poster.png") })
+    .screenshot({ path: path.join(artifacts, `replay-${label}-poster.png`) })
     .catch(() => {});
 
   const telemetryUp = await waitState(
@@ -219,6 +297,28 @@ console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
     "replay telemetry overview",
   );
   assert(telemetryUp, "replay telemetry resolves at the playhead");
+  const s0 = await snap(page);
+  assert(s0.telemetrySource === expectSource, `telemetry source is ${expectSource} (got ${s0.telemetrySource})`);
+  console.log(
+    `  telemetry ready ${Math.round(s0.telemetryReadyMs ?? -1)} ms after navigation; ` +
+      `${s0.routePoints} route points; hasGps=${s0.hasGps}`,
+  );
+  if (expectSource === "artifacts") {
+    // The whole point: the page never touched the history API.
+    assert(tracker.seen.telemetryApi === 0, `no /telemetry? request (${tracker.seen.telemetryApi})`);
+    assert(tracker.seen.artifactGets.length > 0, `artifact GETs issued (${tracker.seen.artifactGets.length})`);
+    assert(s0.routePoints >= MIN_ROUTE_POINTS, `route line has ≥ ${MIN_ROUTE_POINTS} points (${s0.routePoints})`);
+    assert(s0.hasGps === s0.routePoints > 0, "hasGps agrees with the route line");
+    const bytes = tracker.seen.artifactGets.reduce((n, e) => n + (e.bytes ?? 0), 0);
+    console.log(
+      `  artifacts at open: ${tracker.seen.artifactGets.length} GETs, ${bytes} bytes on the wire ` +
+        `(${tracker.seen.artifactGets.map((e) => path.basename(e.url) + (e.bytes ? `=${e.bytes}` : "")).join(", ")})`,
+    );
+  } else {
+    assert(tracker.seen.telemetryApi > 0, `REST fallback issued /telemetry? requests (${tracker.seen.telemetryApi})`);
+    assert(tracker.seen.artifactGets.length === 0, "no artifact GETs on the REST path");
+    console.log(`  REST fallback: ${tracker.seen.telemetryApi} /telemetry? calls at open`);
+  }
 
   // --- PLAY: the pacer contract -------------------------------------------
   await page.evaluate(() => window.__PLAYER.play());
@@ -248,7 +348,7 @@ console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
       "gps readout inside its staleness window",
     );
   }
-  await page.locator("video").screenshot({ path: path.join(artifacts, "replay-playing.png") });
+  await page.locator("video").screenshot({ path: path.join(artifacts, `replay-${label}-playing.png`) });
 
   // --- PAUSE: everything freezes together ---------------------------------
   await page.evaluate(() => window.__PLAYER.pause());
@@ -263,6 +363,7 @@ console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
 
   // --- SEEK while paused: both streams land together ----------------------
   const seekTarget = manifest.from + 5 * 60_000;
+  const artifactsBeforeSeek = tracker.seen.artifactGets.length;
   await page.evaluate((ts) => window.__PLAYER.seek(ts), seekTarget);
   await page.waitForTimeout(1000);
   const s1 = await snap(page);
@@ -298,7 +399,21 @@ console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
     "telemetry re-resolves at the seek target",
   );
   assert(telemetryLanded, "telemetry lands on the seek target with the video");
-  await page.locator("video").screenshot({ path: path.join(artifacts, "replay-seeked.png") });
+  await page.locator("video").screenshot({ path: path.join(artifacts, `replay-${label}-seeked.png`) });
+  if (expectSource === "artifacts") {
+    const fetchedForSeek = tracker.seen.artifactGets.length - artifactsBeforeSeek;
+    console.log(`  seek +5 min fetched ${fetchedForSeek} new segment(s)`);
+    // Seek BACK into ground already visited: the cache answers, nothing is fetched.
+    const before = tracker.seen.artifactGets.length;
+    await page.evaluate((ts) => window.__PLAYER.seek(ts), manifest.from);
+    await page.waitForTimeout(2500);
+    const refetched = tracker.seen.artifactGets.length - before;
+    assert(refetched === 0, `seek back to the start refetches nothing (${refetched} GETs)`);
+    const keys = tracker.seen.artifactGets.map((e) => e.url);
+    assert(new Set(keys).size === keys.length, "every artifact fetched at most once");
+    await page.evaluate((ts) => window.__PLAYER.seek(ts), seekTarget);
+    await page.waitForTimeout(1000);
+  }
 
   // --- SCRUB then RESUME: alignment survives ------------------------------
   const scrubTarget = manifest.from + 9 * 60_000;
@@ -324,6 +439,45 @@ console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
     );
   }
   await page.evaluate(() => window.__PLAYER.pause());
+  tracker.stop();
+  return s0;
+}
+
+if (ONLY.has("replay")) {
+  console.log("\n[3/3] Sessions acceptance: synced video+telemetry replay");
+  let sessionId = env.XORGATE_TEST_SESSION_ID;
+  if (!sessionId) {
+    const sessions = await server.api(`/devices/${DEVICE}/sessions?limit=1`);
+    sessionId = sessions.sessions[0].id;
+  }
+  const withBlock = await server.api(`/devices/${DEVICE}/replay-manifest?sessionId=${sessionId}`);
+  const withoutBlock = await server.api(
+    `/devices/${DEVICE}/replay-manifest?sessionId=${sessionId}&telemetry=0`,
+  );
+  const manifest = withBlock.replay ?? withBlock;
+  const restManifest = withoutBlock.replay ?? withoutBlock;
+  const telemetrySessions = manifest.telemetry?.sessions ?? [];
+  console.log(
+    `  session ${sessionId} — ${manifest.sessions[0].segments.length} video segments, ` +
+      `${Math.round((manifest.to - manifest.from) / 60000)} min; telemetry block: ` +
+      (manifest.telemetry
+        ? `${telemetrySessions.length} session(s), ${telemetrySessions.reduce((n, s) => n + s.segments.length, 0)} segments, ` +
+          `${telemetrySessions.filter((s) => s.overview).length} with an overview`
+        : "ABSENT (older server)"),
+  );
+  const metrics = ["gps.lat", "gps.lon", "gps.speed", "system.cpu_temp", "system.cpu_usage"];
+  currentTest = "replay";
+  assert(manifest.telemetry !== undefined, "the manifest carries its telemetry block");
+  assert(restManifest.telemetry === undefined, "telemetry=0 omits the block");
+
+  // 3a. Artifact mode: the block as served.
+  const a = await replayAcceptance(page, { label: "artifacts", manifest, expectSource: "artifacts", metrics });
+  // 3b. REST fallback: the same session without the block.
+  const b = await replayAcceptance(page, { label: "rest", manifest: restManifest, expectSource: "rest", metrics });
+  console.log(
+    `  open-to-telemetry: artifacts ${Math.round(a.telemetryReadyMs ?? -1)} ms vs REST ${Math.round(b.telemetryReadyMs ?? -1)} ms ` +
+      `(route points ${a.routePoints} vs ${b.routePoints})`,
+  );
 }
 
 await browser.close();

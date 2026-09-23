@@ -1,28 +1,49 @@
-// The e2e harness server: the ONLY holder of the xorgate API key, playing the
-// part of a consumer's backend (Alocate's shape). The browser gets vended
+// The e2e harness server: the ONLY holder of the xorgate credential, playing
+// the part of a consumer's backend (Alocate's shape). The browser gets vended
 // credentials, channel metadata, a manifest object and proxied telemetry;
-// never the key.
+// never the credential.
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
+/**
+ * `.env` (when present) overlaid with any `XORGATE_*` variable from the
+ * process environment, so a one-off run can point the suite elsewhere
+ * without editing the file. `XORGATE_ORG_ID` is always required; the
+ * credential is `XORGATE_API_KEY`, or a browser login when
+ * `XORGATE_AUTH_MODE=browser-login` (run.mjs captures the token in memory).
+ */
 export function loadEnv(envPath) {
-  const env = Object.fromEntries(
-    readFileSync(envPath, "utf8")
-      .split("\n")
-      .filter((l) => l.includes("=") && !l.trim().startsWith("#"))
-      .map((l) => [l.slice(0, l.indexOf("=")).trim(), l.slice(l.indexOf("=") + 1).trim()]),
-  );
-  const missing = ["XORGATE_API_KEY", "XORGATE_ORG_ID"].filter((k) => !env[k]);
-  if (missing.length) throw new Error(`missing in ${envPath}: ${missing.join(", ")}`);
+  const env = existsSync(envPath)
+    ? Object.fromEntries(
+        readFileSync(envPath, "utf8")
+          .split("\n")
+          .filter((l) => l.includes("=") && !l.trim().startsWith("#"))
+          .map((l) => [l.slice(0, l.indexOf("=")).trim(), l.slice(l.indexOf("=") + 1).trim()]),
+      )
+    : {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith("XORGATE_") && v !== undefined && v !== "") env[k] = v;
+  }
+  const required = ["XORGATE_ORG_ID"];
+  if (env.XORGATE_AUTH_MODE !== "browser-login") required.push("XORGATE_API_KEY");
+  const missing = required.filter((k) => !env[k]);
+  if (missing.length) throw new Error(`missing in ${envPath} / environment: ${missing.join(", ")}`);
   return env;
 }
 
-export async function startServer({ env, baseUrl, workspaceId, bundle, testConfig }) {
+/**
+ * `authorization()` returns the bearer value for every upstream call: the
+ * API key from the env, or the session token a browser login captured. It is
+ * a function so the token never sits in a config object that could be
+ * logged or serialized.
+ */
+export async function startServer({ env, baseUrl, workspaceId, bundle, testConfig, authorization }) {
+  const bearer = authorization ?? (() => env.XORGATE_API_KEY);
   const api = async (path, init = {}) => {
     const res = await fetch(`${baseUrl}/v1${path}`, {
       ...init,
       headers: {
-        Authorization: `Bearer ${env.XORGATE_API_KEY}`,
+        Authorization: `Bearer ${bearer()}`,
         "X-Organization-Id": env.XORGATE_ORG_ID,
         "Content-Type": "application/json",
         ...(init.headers ?? {}),

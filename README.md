@@ -79,6 +79,15 @@ function Fleet() {
   telemetry resolves at the playhead; drift between them is structurally
   impossible rather than merely small. fMP4 over MSE, gap-aware, with
   presigned-URL refresh that never resets the clock.
+- **Recorded telemetry straight from S3.** When the replay manifest carries
+  its `telemetry` block (API 0.9.0), `useReplayTelemetry` reads one presigned
+  overview object per telemetry session for the route line and the scrub
+  preview, and the device's own 60 s segments for the readouts around the
+  playhead: no REST call, no Lambda, no database on the replay's hot path.
+  Segments are immutable and cached by S3 key, so a seek back into ground
+  already visited fetches nothing, and a still-recording session grows as the
+  manifest re-polls every 60 s. Without the block (an older server,
+  `telemetry: false`) the REST history routes serve it as before.
 - **A small bundle for pages that need none of that.** Every live dependency
   (mqtt, the KVS and Cognito clients) sits behind a dynamic import; a page
   that only lists devices ships a few kB of this package and zero AWS code.

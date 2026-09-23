@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.4.0
+
+Recorded telemetry off the database. When the replay manifest carries its
+`telemetry` block (`@xorgate/sdk` 0.8.0, API 0.9.0), `useReplayTelemetry`
+reads the session artifacts the block presigns and never calls the REST
+history routes; without the block, nothing changes. Tracks
+`@xorgate/sdk` ^0.8.0.
+
+### Added
+
+- **`useReplayTelemetry` artifact mode.** Mode selection, in order: manifest
+  block present (`player.telemetry`) ⇒ artifacts; else a `fetchTelemetry`
+  override ⇒ REST through it; else REST through the client. In artifact mode:
+  - The **overview tier** is one presigned GET per telemetry session in the
+    window (`overview.v1`: every metric the segments contained, one grid per
+    metric group, bucketed with this package's own ladder and targets). While
+    a session is still `open`, or closed so recently the server has not built
+    its overview yet, the hook builds one itself from the session's raw
+    segments (six fetches at a time, same ladder, same targets). Sessions
+    merge in `from` order; a window can hold two.
+  - The **window tier** is the raw 60 s segments whose bounds cover the
+    playhead window (plus one segment of pre-roll), with the same hysteresis
+    as before, expressed over segment coverage; the next segment is
+    prefetched. One window serves every group, since a segment holds them
+    all.
+  - **Cached by S3 key** (the URL without its presigned query string) for the
+    hook's lifetime: a manifest URL refresh, a second window over the same
+    stretch, or a seek back never refetches bytes. In-flight fetches are
+    shared, so a segment wanted by the overview build and the window at once
+    is fetched once.
+  - **`Promise.allSettled` per session:** one failed session degrades that
+    session, not the replay. `error` means every session failed.
+  - **403 on an artifact URL** takes the same seam a video segment 403 takes
+    (`player.notifyUrlsExpired`, below), once per burst; the manifest refresh
+    it queues brings fresh URLs and the cache key ignores the signature, so
+    only the failed objects are retried.
+  - **No inflater.** Overviews and segments are served with
+    `Content-Encoding: gzip`, so `fetch()` inflates them natively in browsers,
+    Node 18+, iOS and Android. One defensive check remains: a segment body
+    that still starts with the gzip magic bytes throws a typed
+    `INVALID_RESPONSE` naming the key (an un-normalised object in a manifest
+    is a backend defect, not something to hide).
+  - `metrics` defaults to every metric the artifacts contain; the device and
+    model are not fetched.
+- **`useReplayTelemetry().source`**: `"artifacts"` | `"rest"` | `null`, so a
+  page (or a test) can tell which path served it.
+- **`player.telemetry`** on `useReplayPlayerCore` / `useReplayPlayer`: the
+  manifest's `telemetry` block from the LATEST manifest, refreshed with every
+  manifest change like the presigned video URLs and never part of the replay
+  identity, so a URL refresh swaps artifact URLs without resetting the clock.
+  Null when the server sent no block.
+- **`player.notifyUrlsExpired()`**: the presigned-URL expiry seam, now
+  public. Queues the manifest refresh (when the manifest came from
+  `useReplayManifest`) and calls `onUrlsExpired`, exactly as a video segment
+  403 does.
+- **`useReplayManifest` polls while a session is open.** While any video or
+  telemetry session in the latest manifest is `open`, the manifest is
+  refetched every 60 s (`REPLAY_OPEN_POLL_MS`; a shorter `refetchIntervalMs`
+  wins) and the poll stops once every session has closed. New telemetry
+  segments extend the client-built overview through the cache (only new keys
+  are fetched) and the built overview replaces it on close. Video URLs
+  refresh; the video timeline itself is still the one the replay was built
+  from (see Unchanged).
+- Pure, exported helpers for the artifacts: `overviewToSeries`,
+  `segmentToSeries`, `insightsFromOverview`, `mergeSeries`,
+  `buildOverviewSeries`, `chooseBucketMs`, `segmentsCovering`, `artifactKey`,
+  `manifestHasOpenSession`, and the `OverviewV1`, `OverviewGroupV1`,
+  `SegmentHeader`, `DecodedSegment`, `ReplayTelemetrySource` types. The
+  `ReplayTelemetry*`, `TelemetryInsights`, `TelemetryInsightEvent` and
+  `TelemetrySession` types from `@xorgate/sdk` are re-exported.
+
+### Fixed
+
+- **REST fallback: one throttled group no longer wipes the others.** The
+  overview effect used `Promise.all` over the per-group history calls, so a
+  503 on `system` discarded `gps` and the route disappeared. It is
+  `Promise.allSettled` now: the groups that answered render, the failures are
+  reported through `onError`, and `error` is set only when every group
+  failed.
+
+### Unchanged, and worth knowing
+
+- `useReplayTelemetry`'s signature. Existing callers get artifact mode the
+  moment their server sends the block.
+- The video timeline is built from the first manifest of a replay and only
+  its URLs refresh; the 60 s poll does not extend it. Extending a playing
+  replay's video coverage without resetting the clock is a core change
+  outside this release.
+- The e2e suite's step 3 now runs the Sessions acceptance twice: once with
+  the block (asserting the page issues no `/telemetry?` request and reads
+  the artifacts) and once with `telemetry=0` (the REST fallback). It can run
+  against dev with a browser login instead of an API key
+  (`XORGATE_AUTH_MODE=browser-login`; see `e2e/run.mjs`).
+
 ## 0.3.1
 
 ### Fixed

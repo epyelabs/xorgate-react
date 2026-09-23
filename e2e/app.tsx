@@ -3,9 +3,12 @@
  * will: the PROXIED profile. The xorgate API key lives only in the harness
  * server; this page receives vended live credentials, a replay manifest
  * OBJECT fetched server-side, and proxies telemetry history through the
- * harness — the browser touches no xorgate REST endpoint.
+ * harness — the browser touches no xorgate REST endpoint. When the manifest
+ * carries its `telemetry` block the hook reads the presigned artifacts
+ * straight from S3 and the proxy is never called; that is what step 3 of
+ * `run.mjs` asserts in both directions.
  */
-import { StrictMode, useEffect } from "react";
+import { StrictMode, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
   XorgateProvider,
@@ -114,6 +117,12 @@ function ReplayStateBridge({
     metrics: metrics as never,
     fetchTelemetry,
   });
+  // When the overview tier first settled: the "open to route line" clock,
+  // measured from navigation start so artifact and REST runs compare fairly.
+  const readyAt = useRef<number | null>(null);
+  if (readyAt.current === null && telemetry.source !== null && !telemetry.loading) {
+    readyAt.current = performance.now();
+  }
   useEffect(() => {
     const lane = player.lanes[0];
     const laneState = lane ? player.laneState(lane.streamKey) : null;
@@ -131,6 +140,8 @@ function ReplayStateBridge({
       videoPaused: video?.paused ?? null,
       telemetryLoading: telemetry.loading,
       telemetryError: telemetry.error?.message ?? null,
+      telemetrySource: telemetry.source,
+      telemetryReadyMs: readyAt.current,
       latest: Object.fromEntries(
         Object.entries(telemetry.latest).map(([k, v]) => [k, { value: v.value, ts: v.ts }]),
       ),
