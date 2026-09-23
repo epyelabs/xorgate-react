@@ -117,12 +117,15 @@ function ReplayStateBridge({
     metrics: metrics as never,
     fetchTelemetry,
   });
-  // When the overview tier first settled: the "open to route line" clock,
-  // measured from navigation start so artifact and REST runs compare fairly.
+  // The "open to route line" clock, measured from navigation start so the
+  // artifact and REST runs compare fairly: when the overview tier first
+  // settled, and when the route line first had points.
   const readyAt = useRef<number | null>(null);
+  const routeAt = useRef<number | null>(null);
   if (readyAt.current === null && telemetry.source !== null && !telemetry.loading) {
     readyAt.current = performance.now();
   }
+  if (routeAt.current === null && telemetry.hasGps) routeAt.current = performance.now();
   useEffect(() => {
     const lane = player.lanes[0];
     const laneState = lane ? player.laneState(lane.streamKey) : null;
@@ -142,6 +145,7 @@ function ReplayStateBridge({
       telemetryError: telemetry.error?.message ?? null,
       telemetrySource: telemetry.source,
       telemetryReadyMs: readyAt.current,
+      routeReadyMs: routeAt.current,
       latest: Object.fromEntries(
         Object.entries(telemetry.latest).map(([k, v]) => [k, { value: v.value, ts: v.ts }]),
       ),

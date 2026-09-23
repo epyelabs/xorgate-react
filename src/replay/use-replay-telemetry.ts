@@ -366,6 +366,12 @@ export function useReplayTelemetry(
     loading: boolean;
     error: XorgateError | null;
   }>({ series: new Map(), loading: false, error: null });
+  // Which replay (and source) the overview tier last settled for. `loading`
+  // is true from the moment a replay exists until its first overview run
+  // completes, so a consumer never sees a "no GPS recorded" frame before the
+  // first fetch has even started.
+  const runKey = timeline ? `${source}:${deviceId}:${timeline.from}:${timeline.to}` : null;
+  const [settledKey, setSettledKey] = useState<string | null>(null);
 
   // --- metric groups -------------------------------------------------------
   // Artifact mode: every metric the artifacts contain (no device/model round
@@ -457,10 +463,13 @@ export function useReplayTelemetry(
         loading: false,
         error: allFailed ? failures[0] : null,
       });
+      setSettledKey(runKey);
     })();
     return () => {
       cancelled = true;
     };
+    // runKey is derived from the deps listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artifacts, telemetry, telemetryKey, timeline, loader]);
 
   // A new replay forgets the last artifact run.
@@ -510,11 +519,12 @@ export function useReplayTelemetry(
         loading: false,
         error: failures.length === groups.length ? failures[0] : null,
       });
+      setSettledKey(runKey);
     })();
     return () => {
       cancelled = true;
     };
-    // groupsKey stands in for the groups array identity.
+    // groupsKey stands in for the groups array identity; runKey derives from the rest.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, deviceId, timeline, groupsKey, fetchHistory]);
 
@@ -762,7 +772,7 @@ export function useReplayTelemetry(
     routeLines,
     traveledLines: traveled,
     hasGps: overviewTrace.pts.length > 0,
-    loading: overview.loading,
+    loading: runKey !== null && (overview.loading || settledKey !== runKey),
     error: overview.error,
     source,
   };

@@ -241,7 +241,7 @@ if (ONLY.has("live-video")) {
 // ===========================================================================
 // Request accounting for one page visit: what the PAGE fetched, by kind.
 function trackRequests(page) {
-  const seen = { telemetryApi: 0, artifactGets: [], other: 0 };
+  const seen = { telemetryApi: 0, telemetryApiBytes: 0, artifactGets: [], other: 0 };
   const onRequest = (req) => {
     const u = req.url();
     if (u.includes("/telemetry?")) seen.telemetryApi++;
@@ -250,6 +250,10 @@ function trackRequests(page) {
   };
   const onResponse = async (res) => {
     const u = res.url();
+    if (u.includes("/telemetry?")) {
+      seen.telemetryApiBytes += Number(res.headers()["content-length"] ?? 0) || 0;
+      return;
+    }
     if (!u.includes("/telemetry/v1/")) return;
     const key = u.slice(0, u.indexOf("?"));
     const entry = seen.artifactGets.find((e) => e.url === key && e.bytes === null);
@@ -300,8 +304,8 @@ async function replayAcceptance(page, { label, manifest, expectSource, metrics }
   const s0 = await snap(page);
   assert(s0.telemetrySource === expectSource, `telemetry source is ${expectSource} (got ${s0.telemetrySource})`);
   console.log(
-    `  telemetry ready ${Math.round(s0.telemetryReadyMs ?? -1)} ms after navigation; ` +
-      `${s0.routePoints} route points; hasGps=${s0.hasGps}`,
+    `  overview settled ${Math.round(s0.telemetryReadyMs ?? -1)} ms and route line ` +
+      `${Math.round(s0.routeReadyMs ?? -1)} ms after navigation; ${s0.routePoints} route points; hasGps=${s0.hasGps}`,
   );
   if (expectSource === "artifacts") {
     // The whole point: the page never touched the history API.
@@ -317,7 +321,9 @@ async function replayAcceptance(page, { label, manifest, expectSource, metrics }
   } else {
     assert(tracker.seen.telemetryApi > 0, `REST fallback issued /telemetry? requests (${tracker.seen.telemetryApi})`);
     assert(tracker.seen.artifactGets.length === 0, "no artifact GETs on the REST path");
-    console.log(`  REST fallback: ${tracker.seen.telemetryApi} /telemetry? calls at open`);
+    console.log(
+      `  REST fallback: ${tracker.seen.telemetryApi} /telemetry? calls, ${tracker.seen.telemetryApiBytes} bytes (uncompressed JSON) at open`,
+    );
   }
 
   // --- PLAY: the pacer contract -------------------------------------------
@@ -475,8 +481,8 @@ if (ONLY.has("replay")) {
   // 3b. REST fallback: the same session without the block.
   const b = await replayAcceptance(page, { label: "rest", manifest: restManifest, expectSource: "rest", metrics });
   console.log(
-    `  open-to-telemetry: artifacts ${Math.round(a.telemetryReadyMs ?? -1)} ms vs REST ${Math.round(b.telemetryReadyMs ?? -1)} ms ` +
-      `(route points ${a.routePoints} vs ${b.routePoints})`,
+    `  open-to-route-line: artifacts ${Math.round(a.routeReadyMs ?? -1)} ms vs REST ${Math.round(b.routeReadyMs ?? -1)} ms ` +
+      `after navigation (route points ${a.routePoints} vs ${b.routePoints})`,
   );
 }
 
