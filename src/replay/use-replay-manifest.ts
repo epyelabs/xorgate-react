@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReplayManifest, StreamKey } from "@xorgate/sdk";
 import { useXorgateContext } from "../context.js";
 import { useXorgateQuery, type QueryOptions, type QueryResult } from "../query/use-query.js";
@@ -33,13 +33,25 @@ export interface UseReplayManifestResult extends QueryResult<ReplayManifest> {
 export const MANIFEST_REFRESH = Symbol.for("xorgate.replay.refreshUrls");
 
 /**
+ * While any session in the manifest is still `open` (the device is still
+ * uploading), the manifest is refetched this often so the replay grows:
+ * new video URLs, new telemetry segments, and the telemetry overview once
+ * the session closes and the server builds it. One segment rotation; polling
+ * faster buys nothing.
+ */
+export const REPLAY_OPEN_POLL_MS = 60_000;
+
+/**
  * Caps enforced upstream: 600 segments in total, and in range mode 10
  * sessions and 24 hours. Exceeding one is a 400 telling you to narrow the
  * request, which arrives here as `error`, not as an empty manifest.
  *
  * The hook re-fetches itself shortly before `urlExpiresAt` (which is already
  * the real TTL minus a 5 minute margin), so a replay left open for an hour
- * keeps working.
+ * keeps working. While any video or telemetry session in the latest manifest
+ * is `open` it also polls every {@link REPLAY_OPEN_POLL_MS} (a shorter
+ * `refetchIntervalMs` in `options` wins), and stops once every session has
+ * closed.
  */
 export function useReplayManifest(
   deviceId: string | null,
@@ -56,6 +68,20 @@ export function useReplayManifest(
         ? `replay-manifest:${deviceId}:session:${params.sessionId}`
         : `replay-manifest:${deviceId}:range:${iso(params.from)}:${iso(params.to)}:${params.streamKey ?? ""}`;
 
+  // Open-session poll (D6). State rather than a derivation of `base.data`,
+  // because the interval is an OPTION of the query hook and has to be known
+  // before the query renders; one render of lag is fine.
+  const [anyOpen, setAnyOpen] = useState(false);
+  const requested = options?.refetchIntervalMs;
+  const refetchIntervalMs = anyOpen
+    ? Math.min(requested ?? REPLAY_OPEN_POLL_MS, REPLAY_OPEN_POLL_MS)
+    : requested;
+  const effectiveOptions = useMemo<QueryOptions | undefined>(() => {
+    if (refetchIntervalMs === requested) return options;
+    return { ...options, refetchIntervalMs };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options, refetchIntervalMs, requested]);
+
   const base = useXorgateQuery<ReplayManifest>(
     key,
     (ctx) => {
@@ -64,8 +90,12 @@ export function useReplayManifest(
       }
       return ctx.rest.client.media.replayManifest(deviceId!, params!);
     },
-    options,
+    effectiveOptions,
   );
+
+  useEffect(() => {
+    setAnyOpen(base.data ? manifestHasOpenSession(base.data) : false);
+  }, [base.data]);
 
   const refreshUrls = useCallback(async () => {
     await base.refetch();
@@ -102,4 +132,10 @@ export function useReplayManifest(
 
 function iso(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : value;
+}
+
+/** True while any video or telemetry session in the manifest is still `open`. */
+export function manifestHasOpenSession(manifest: ReplayManifest): boolean {
+  if (manifest.sessions.some((s) => s.status === "open")) return true;
+  return manifest.telemetry?.sessions.some((s) => s.status === "open") ?? false;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReplayManifest, StreamKey, XorgateError } from "@xorgate/sdk";
+import type { ReplayManifest, ReplayTelemetry, StreamKey, XorgateError } from "@xorgate/sdk";
 import { buildClockTimeline, buildLanes, segmentUrlKey, type LaneSegment, type ReplayLane } from "./lanes.js";
 import { ReplayClock, type GapSkipEvent, type ReplayRate } from "./replay-clock.js";
 import type { ReplayEngine, ReplayEngineFactory } from "./replay-engine.js";
@@ -57,6 +57,16 @@ export interface UseReplayPlayerCore {
   /** The merged clock timeline: coverage across ALL lanes. */
   timeline: ReplayTimeline | null;
   lanes: ReplayLane[];
+  /**
+   * The manifest's `telemetry` block: the recorded telemetry of the window as
+   * presigned S3 artifacts, from the LATEST manifest (refreshed with every
+   * manifest change, like the presigned video URLs, and NOT part of the replay
+   * identity, so a URL refresh swaps artifact URLs without resetting the
+   * clock). Null when the server sent no block (an older server, or a
+   * `telemetry: false` request), which is what sends `useReplayTelemetry` to
+   * its REST fallback.
+   */
+  telemetry: ReplayTelemetry | null;
 
   /** Throttled snapshot. `playheadTs` is epoch ms. */
   playheadTs: number;
@@ -86,6 +96,14 @@ export interface UseReplayPlayerCore {
   attachLane: (streamKey: StreamKey, createEngine: ReplayEngineFactory) => () => void;
   /** Per-lane render state. Returns a `loading`, non-gap default for an unknown key. */
   laneState: (streamKey: StreamKey) => ReplayLaneState;
+  /**
+   * A presigned URL was refused (HTTP 403): the manifest's URLs have lapsed.
+   * Queues the manifest refresh (when the manifest came from
+   * `useReplayManifest`) and calls `onUrlsExpired`, exactly as a video
+   * segment 403 does. `useReplayTelemetry` calls this for artifact URLs; a
+   * consumer fetching manifest URLs itself may too.
+   */
+  notifyUrlsExpired: () => void;
 }
 
 // Micro-gap jump ceiling: buffered holes at rotation seams are ≤ ~2 s (fstat
@@ -157,6 +175,22 @@ export function useReplayPlayerCore(
   // useReplayManifest; a proxied consumer refreshes by passing a new object.
   const manifestRef = useRef(manifest);
   manifestRef.current = manifest;
+
+  // The telemetry block rides on the LATEST manifest, like the URL map: a
+  // refresh swaps artifact URLs (and, for an open session, lists new
+  // segments) without touching the replay identity.
+  const telemetry = manifest?.telemetry ?? null;
+
+  const notifyUrlsExpired = useCallback(() => {
+    // Queue the automatic manifest refresh (when the manifest came from
+    // useReplayManifest), then tell the app.
+    const current = manifestRef.current as
+      | (ReplayManifest & { [MANIFEST_REFRESH]?: () => Promise<void> })
+      | null
+      | undefined;
+    void current?.[MANIFEST_REFRESH]?.();
+    onUrlsExpiredRef.current?.();
+  }, []);
 
   // --- the clock, one per replay ---
   const [clock, setClock] = useState<ReplayClock | null>(null);
@@ -331,16 +365,7 @@ export function useReplayPlayerCore(
           });
         },
         onUpdate: () => onClockChange(),
-        onAuthError: () => {
-          // Queue the automatic manifest refresh (when the manifest came from
-          // useReplayManifest), then tell the app.
-          const current = manifestRef.current as
-            | (ReplayManifest & { [MANIFEST_REFRESH]?: () => Promise<void> })
-            | null
-            | undefined;
-          void current?.[MANIFEST_REFRESH]?.();
-          onUrlsExpiredRef.current?.();
-        },
+        onAuthError: notifyUrlsExpired,
       });
       const media: ReplayEngine = engine;
 
@@ -417,7 +442,7 @@ export function useReplayPlayerCore(
         setLaneState(streamKey, { status: "loading", isPacer: false });
       };
     },
-    [clock, lanes, setLaneState],
+    [clock, lanes, setLaneState, notifyUrlsExpired],
   );
 
   // Restart lane runtimes when the replay (clock/lanes) changes while the
@@ -495,6 +520,7 @@ export function useReplayPlayerCore(
     clock,
     timeline,
     lanes,
+    telemetry,
     playheadTs: snap.playheadTs,
     playing: snap.playing,
     rate: snap.rate,
@@ -509,6 +535,7 @@ export function useReplayPlayerCore(
     stepBoundary,
     attachLane,
     laneState,
+    notifyUrlsExpired,
   };
 }
 

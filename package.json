@@ -66,7 +66,7 @@
     "@aws-sdk/client-kinesis-video": "^3.1064.0",
     "@aws-sdk/client-kinesis-video-signaling": "^3.1064.0",
     "@aws-sdk/credential-provider-cognito-identity": "^3.972.42",
-    "@xorgate/sdk": "^0.7.0",
+    "@xorgate/sdk": "^0.8.0",
     "amazon-kinesis-video-streams-webrtc": "^2.8.0",
     "events": "^3.3.0",
     "mqtt": "^5.15.1"

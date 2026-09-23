@@ -26,9 +26,17 @@ export type {
   ReplayManifest,
   ReplaySegment,
   ReplaySession,
+  ReplayTelemetry,
+  ReplayTelemetryOverview,
+  ReplayTelemetrySegment,
+  ReplayTelemetrySession,
   StreamKey,
   TelemetryHistory,
+  TelemetryInsightEvent,
+  TelemetryInsightNotComputable,
+  TelemetryInsights,
   TelemetryReading,
+  TelemetrySession,
   TransferAdoption,
   TransferBlocker,
   TransferBlockerCode,
@@ -226,6 +234,8 @@ export { parseSegmentMediaInfo, type SegmentMediaInfo } from "./replay/mp4-box.j
 
 export {
   useReplayManifest,
+  manifestHasOpenSession,
+  REPLAY_OPEN_POLL_MS,
   type UseReplayManifestParams,
   type UseReplayManifestResult,
 } from "./replay/use-replay-manifest.js";
@@ -249,6 +259,7 @@ export {
   useReplayTelemetry,
   type UseReplayTelemetry,
   type UseReplayTelemetryOptions,
+  type ReplayTelemetrySource,
 } from "./replay/use-replay-telemetry.js";
 export { ReplayVideo, type ReplayVideoProps } from "./replay/replay-video.js";
 
@@ -274,10 +285,25 @@ export {
   DEFAULT_STALENESS_MS,
   WINDOW_SPAN_MS,
   WINDOW_MIN_SPAN_MS,
+  // Session artifacts (the manifest's `telemetry` block)
+  artifactKey,
+  overviewToSeries,
+  segmentToSeries,
+  insightsFromOverview,
+  mergeSeries,
+  buildOverviewSeries,
+  chooseBucketMs,
+  segmentsCovering,
+  OVERVIEW_GPS_TARGET_BUCKETS,
+  OVERVIEW_DEFAULT_TARGET_BUCKETS,
   type MetricSeries,
   type GpsTrace,
   type WindowBounds,
   type PositionResolution,
+  type OverviewV1,
+  type OverviewGroupV1,
+  type SegmentHeader,
+  type DecodedSegment,
 } from "./replay/replay-telemetry.js";
 
 // ---------------------------------------------------------------------------
