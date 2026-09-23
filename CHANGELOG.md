@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.1
+
+Artifact mode reads the replay's WINDOW, not whole telemetry sessions.
+
+### Fixed
+
+- **`useReplayTelemetry` clips every session's overview to the replay
+  timeline** (plus the same 60 s preroll the REST path fetched). An overview
+  artifact covers its whole telemetry session, and telemetry sessions do not
+  line up with video sessions: the recorder starts at boot, the camera after
+  its GPS gate, and a reboot mid-drive splits telemetry the video never
+  sees. Since 0.4.0 the route, readouts and scrub preview of a replay could
+  therefore include a later (or earlier) drive that the same telemetry
+  session happened to hold; the REST path never had this problem because its
+  query was bounded by the window. Seen in production on 2026-09-23 as a
+  second drive's route drawn on the first drive's replay.
+
+### Added
+
+- **`useReplayTelemetry().overviewSummary`**: `{ distanceM, movingMs, fixes,
+  from, to, method: "overview-haversine" }` over the replay's own window,
+  integrated over the clipped overview series with the platform's own rules
+  (accepted fixes, the 60 m/s jump reject, the 30 s gap break, the
+  `gps.speed` stationary rule, the 10 m dead-band without speed). This is
+  the number a replay header should print: the manifest's per-session
+  `insights` describe whole sessions, and summing the ones that overlap a
+  replay over-counts (7.5 km printed for a 3.6 km drive on 2026-09-23). On
+  the golden dev session the window summary is within 2 % of the server's
+  raw-sample insight. Null until the overview settles or when the window
+  holds no GPS.
+- Pure helpers, exported: `clipSeries(series, fromMs, toMs)`,
+  `summarizeGpsSeries(series, fromMs, toMs, breakGapMs?)`, `haversineM`,
+  `DEFAULT_BREAK_GAP_MS`, and the `GpsSummary` type.
+
 ## 0.4.0
 
 Recorded telemetry off the database. When the replay manifest carries its

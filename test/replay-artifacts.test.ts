@@ -237,3 +237,47 @@ describe("segmentsCovering", () => {
     expect(segmentsCovering(segs, 3_650_000, 3_700_000, true).map((s) => s.seq)).toEqual([3])
   })
 })
+
+// --- window clipping and the window summary (0.4.1) -------------------------
+import { clipSeries, summarizeGpsSeries } from "../src/replay/replay-telemetry.js";
+
+describe("clipSeries + summarizeGpsSeries", () => {
+  const goldenObj = JSON.parse(gunzipSync(readFile("overview.v1.golden.json.gz")).toString("utf8")) as OverviewV1;
+  const series = overviewToSeries(goldenObj);
+  const gpsTs = goldenObj.groups.gps.ts;
+
+  it("clips every series to the window and keeps an untouched one by reference", () => {
+    const mid = gpsTs[Math.floor(gpsTs.length / 2)];
+    const clipped = clipSeries(series, mid, goldenObj.to);
+    const lat = clipped.get("gps.lat" as never)!;
+    expect(lat.ts[0]).toBeGreaterThanOrEqual(mid);
+    expect(lat.ts.length).toBeLessThan(series.get("gps.lat" as never)!.ts.length);
+    expect(lat.ts.length).toBe(lat.v.length);
+    const whole = clipSeries(series, goldenObj.from, goldenObj.to);
+    expect(whole.get("gps.lat" as never)).toBe(series.get("gps.lat" as never));
+    expect(clipSeries(series, goldenObj.to + 1, goldenObj.to + 2).size).toBe(0);
+  });
+
+  it("the whole session's summary agrees with the server's raw-sample distance within 2 %", () => {
+    const s = summarizeGpsSeries(series, goldenObj.from, goldenObj.to)!;
+    const raw = goldenObj.insights!.distance!.meters as number; // 25 181.6
+    expect(Math.abs(s.distanceM - raw) / raw).toBeLessThan(0.02);
+    expect(s.method).toBe("overview-haversine");
+    expect(s.movingMs).toBeGreaterThan(0);
+  });
+
+  it("a window counts only what lies inside it; a parked half minute is metres, not the drive", () => {
+    const mid = gpsTs[Math.floor(gpsTs.length / 2)];
+    const a = summarizeGpsSeries(series, goldenObj.from, mid - 1)!;
+    const b = summarizeGpsSeries(series, mid, goldenObj.to)!;
+    const all = summarizeGpsSeries(series, goldenObj.from, goldenObj.to)!;
+    expect(a.distanceM).toBeGreaterThan(0);
+    expect(b.distanceM).toBeGreaterThan(0);
+    expect(Math.abs(a.distanceM + b.distanceM - all.distanceM)).toBeLessThan(200); // at most the one 5 s leg straddling `mid`
+    // The drive's first fix lands 19 s after `from` (position.startAt), so the
+    // parked half minute holds a handful of buckets or none: metres or null.
+    const parked = summarizeGpsSeries(series, goldenObj.from, goldenObj.from + 36_000);
+    expect(parked?.distanceM ?? 0).toBeLessThan(100);
+    expect(summarizeGpsSeries(series, goldenObj.to + 1, goldenObj.to + 60_000)).toBeNull();
+  });
+});

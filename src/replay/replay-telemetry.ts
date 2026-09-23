@@ -719,3 +719,150 @@ export function segmentsCovering<T extends Pick<ReplayTelemetrySegment, "startTs
   if (next) out.push(next);
   return out;
 }
+
+// --- window clipping and the window summary ---------------------------------
+
+/** First index whose ts is >= target (ts ascending). */
+function lowerBound(ts: readonly number[], target: number): number {
+  let lo = 0;
+  let hi = ts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ts[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Clip every series to `[fromMs, toMs]` (inclusive; pure). An overview
+ * artifact covers its WHOLE telemetry session, and a telemetry session and a
+ * replay are joined by time only: the recorder starts at boot, the camera
+ * after its GPS gate, and a reboot mid-drive splits telemetry the video never
+ * sees. Without this the route of the drive after the reboot is drawn on the
+ * replay before it. A series with nothing inside the window is dropped; one
+ * entirely inside is returned as is.
+ */
+export function clipSeries(
+  series: ReadonlyMap<MetricName, MetricSeries>,
+  fromMs: number,
+  toMs: number,
+): Map<MetricName, MetricSeries> {
+  const out = new Map<MetricName, MetricSeries>();
+  for (const [metric, s] of series) {
+    const start = lowerBound(s.ts, fromMs);
+    const end = lowerBound(s.ts, toMs + 1);
+    if (end <= start) continue;
+    if (start === 0 && end === s.ts.length) out.set(metric, s);
+    else out.set(metric, { ...s, ts: s.ts.slice(start, end), v: s.v.slice(start, end) });
+  }
+  return out;
+}
+
+export interface GpsSummary {
+  /** Metres over accepted legs inside the window. */
+  distanceM: number;
+  /** Milliseconds of legs the receiver called moving (or that advanced the dead-band anchor). */
+  movingMs: number;
+  /** Points inside the window that carried an accepted fix. */
+  fixes: number;
+  /** First and last accepted fix inside the window (epoch ms). */
+  from: number;
+  to: number;
+  /** Integrated over the overview grid (bucketed), not the raw samples. */
+  method: "overview-haversine";
+}
+
+/** Consecutive-fix gap that breaks a route leg (the platform's `breakGapMs`). */
+export const DEFAULT_BREAK_GAP_MS = 30_000;
+const GPS_MAX_JUMP_MPS = 60;
+const GPS_MIN_STEP_M = 10;
+const GPS_MOVING_KPH = 2;
+const EARTH_RADIUS_M = 6_371_008.8;
+const toRad = (deg: number): number => (deg * Math.PI) / 180;
+
+/** Great-circle distance in metres (2-D). Same formula as the platform's insights. */
+export function haversineM(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const dLat = toRad(bLat - aLat);
+  const dLon = toRad(bLon - aLon);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLon = Math.sin(dLon / 2);
+  const h = sinLat * sinLat + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * sinLon * sinLon;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * Distance and moving time over the GPS series inside `[fromMs, toMs]`, with
+ * the platform's own rules (`insights.distance` on the server): a fix counts
+ * when lat/lon are finite, in range and not the (0, 0) placeholder; a leg is
+ * broken by a gap over `breakGapMs`; a leg faster than 60 m/s is a glitch
+ * and is skipped; with `gps.speed` present a leg counts only when either end
+ * is above 2 km/h, without it a 10 m dead-band anchor filters GPS scatter.
+ * `null` when the window holds no accepted fix. The series are the overview
+ * grid (2 s buckets on a drive), so the number is within about a percent of
+ * the server's raw-sample insight, which is what the header can print for a
+ * replay whose window does not match its telemetry sessions.
+ */
+export function summarizeGpsSeries(
+  series: ReadonlyMap<MetricName, MetricSeries>,
+  fromMs: number,
+  toMs: number,
+  breakGapMs = DEFAULT_BREAK_GAP_MS,
+): GpsSummary | null {
+  const lat = series.get("gps.lat" as MetricName);
+  const lon = series.get("gps.lon" as MetricName);
+  if (!lat || !lon) return null;
+  const lonByTs = new Map<number, number>();
+  for (let i = 0; i < lon.ts.length; i++) lonByTs.set(lon.ts[i], lon.v[i]);
+  const speed = series.get("gps.speed" as MetricName);
+  const speedByTs = new Map<number, number>();
+  if (speed) for (let i = 0; i < speed.ts.length; i++) speedByTs.set(speed.ts[i], speed.v[i]);
+
+  let meters = 0;
+  let movingMs = 0;
+  let fixes = 0;
+  let first: number | null = null;
+  let last: number | null = null;
+  let prev: { ts: number; lat: number; lon: number; speedKph: number | null } | null = null;
+  let anchor: { lat: number; lon: number } | null = null;
+  for (let i = 0; i < lat.ts.length; i++) {
+    const ts = lat.ts[i];
+    if (ts < fromMs) continue;
+    if (ts > toMs) break;
+    const la = lat.v[i];
+    const lo = lonByTs.get(ts);
+    if (lo === undefined || !Number.isFinite(la) || !Number.isFinite(lo)) continue;
+    if (Math.abs(la) > 90 || Math.abs(lo) > 180 || (la === 0 && lo === 0)) continue;
+    const sp = speedByTs.get(ts);
+    const speedKph = sp !== undefined && Number.isFinite(sp) ? sp : null;
+    fixes++;
+    if (first === null) first = ts;
+    last = ts;
+    if (prev && ts > prev.ts && ts - prev.ts <= breakGapMs) {
+      const dtMs = ts - prev.ts;
+      const legM = haversineM(prev.lat, prev.lon, la, lo);
+      if (legM / (dtMs / 1000) > GPS_MAX_JUMP_MPS) continue;
+      if (speedKph !== null || prev.speedKph !== null) {
+        if ((speedKph ?? 0) > GPS_MOVING_KPH || (prev.speedKph ?? 0) > GPS_MOVING_KPH) {
+          meters += legM;
+          movingMs += dtMs;
+        }
+        anchor = { lat: la, lon: lo };
+      } else {
+        const base = anchor ?? prev;
+        const fromAnchorM = haversineM(base.lat, base.lon, la, lo);
+        if (fromAnchorM >= GPS_MIN_STEP_M) {
+          meters += fromAnchorM;
+          movingMs += dtMs;
+          anchor = { lat: la, lon: lo };
+        }
+      }
+    } else {
+      anchor = { lat: la, lon: lo };
+    }
+    prev = { ts, lat: la, lon: lo, speedKph };
+  }
+  if (fixes === 0 || first === null || last === null) return null;
+  return { distanceM: Math.round(meters * 10) / 10, movingMs, fixes, from: first, to: last, method: "overview-haversine" };
+}
+

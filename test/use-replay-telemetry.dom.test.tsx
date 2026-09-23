@@ -397,3 +397,32 @@ describe("useReplayTelemetry: REST fallback", () => {
 });
 
 void act;
+
+describe("useReplayTelemetry: the replay window, not the whole session", () => {
+  it("clips every session's overview to the timeline and summarises the window", async () => {
+    stubFetch();
+    const goldenObj = JSON.parse(goldenOverview) as { groups: { gps: { ts: number[] } } };
+    const gpsTs = goldenObj.groups.gps.ts;
+    const mid = gpsTs[Math.floor(gpsTs.length / 2)];
+    // A replay over the second half of the drive; the session (and its
+    // overview) covers the whole drive.
+    const half = player({ sessions: [session()], truncated: false }, timelineOf(mid, golden.to));
+    const whole = player({ sessions: [session()], truncated: false }, timelineOf(golden.from, golden.to));
+    const a = renderHook(() => useReplayTelemetry(DEVICE, half.core), { wrapper });
+    const b = renderHook(() => useReplayTelemetry(DEVICE, whole.core), { wrapper });
+    await waitFor(() => expect(a.result.current.loading).toBe(false));
+    await waitFor(() => expect(b.result.current.loading).toBe(false));
+    const pts = (r: typeof a.result) => r.current.routeLines.reduce((n, l) => n + l.length, 0);
+    expect(pts(a.result)).toBeGreaterThan(0);
+    expect(pts(a.result)).toBeLessThan(pts(b.result) * 0.7);
+    const sa = a.result.current.overviewSummary!;
+    const sb = b.result.current.overviewSummary!;
+    expect(sa).not.toBeNull();
+    expect(sb).not.toBeNull();
+    expect(sa.from).toBeGreaterThanOrEqual(mid);
+    expect(sa.distanceM).toBeGreaterThan(0);
+    expect(sa.distanceM).toBeLessThan(sb.distanceM);
+    // The whole drive: within 2 % of the server's own insight (25 181.6 m).
+    expect(Math.abs(sb.distanceM - 25_181.6) / 25_181.6).toBeLessThan(0.02);
+  });
+});

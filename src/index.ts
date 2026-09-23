@@ -294,6 +294,10 @@ export {
   buildOverviewSeries,
   chooseBucketMs,
   segmentsCovering,
+  clipSeries,
+  summarizeGpsSeries,
+  haversineM,
+  DEFAULT_BREAK_GAP_MS,
   OVERVIEW_GPS_TARGET_BUCKETS,
   OVERVIEW_DEFAULT_TARGET_BUCKETS,
   type MetricSeries,
@@ -302,6 +306,7 @@ export {
   type PositionResolution,
   type OverviewV1,
   type OverviewGroupV1,
+  type GpsSummary,
   type SegmentHeader,
   type DecodedSegment,
 } from "./replay/replay-telemetry.js";

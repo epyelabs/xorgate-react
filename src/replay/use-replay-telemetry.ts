@@ -42,6 +42,10 @@ import {
   type MetricSeries,
   type OverviewV1,
   type WindowBounds,
+  clipSeries,
+  summarizeGpsSeries,
+  DEFAULT_BREAK_GAP_MS,
+  type GpsSummary,
 } from "./replay-telemetry.js";
 
 // Pre-roll so a floor sample exists right at the replay start even for the
@@ -57,7 +61,6 @@ const MARKER_INTERP_MS = 3_000;
 // (or S3) at snapshot rate.
 const WINDOW_ERROR_BACKOFF_MS = 5_000;
 /** Route-break floor when the caller does not override it. */
-const DEFAULT_BREAK_GAP_MS = 30_000;
 // Raw segments fetched at once while building an overview client-side.
 const ARTIFACT_CONCURRENCY = 6;
 // A lapsed manifest 403s on EVERY artifact URL at once; tell the player once.
@@ -128,6 +131,14 @@ export interface UseReplayTelemetry {
    * without the block). Null until a replay exists.
    */
   source: ReplayTelemetrySource | null;
+  /**
+   * Distance and moving time over the replay's OWN window, integrated over
+   * the overview series (clipped to the timeline). Null until the overview
+   * settles or when the window holds no GPS. This is the number a header
+   * should print: the manifest's per-session `insights` describe whole
+   * telemetry sessions, which need not line up with a replay.
+   */
+  overviewSummary: GpsSummary | null;
 }
 
 interface MetricGroupSpec {
@@ -451,8 +462,12 @@ export function useReplayTelemetry(
       if (cancelled) return;
       const parts: Map<MetricName, MetricSeries>[] = [];
       const failures: XorgateError[] = [];
+      // An overview covers its whole telemetry session; the replay wants only
+      // its own window (plus the same preroll the REST path fetches).
+      const clipFrom = timeline.from - OVERVIEW_PREROLL_MS;
+      const clipTo = timeline.to + 2_000;
       for (const r of results) {
-        if (r.status === "fulfilled") parts.push(r.value);
+        if (r.status === "fulfilled") parts.push(clipSeries(r.value, clipFrom, clipTo));
         else failures.push(toXorgateError(r.reason));
       }
       for (const f of failures) ctxRef.current.reportError(f);
@@ -731,6 +746,11 @@ export function useReplayTelemetry(
 
   const routeLines = useMemo(() => traceLines(overviewTrace), [overviewTrace]);
 
+  const overviewSummary = useMemo(
+    () => (timeline ? summarizeGpsSeries(overview.series, timeline.from, timeline.to, breakGapMs) : null),
+    [overview.series, timeline, breakGapMs],
+  );
+
   const windowTrace: GpsTrace | null = useMemo(() => {
     void windowVersion;
     const win = windowsRef.current.get(artifacts ? ARTIFACT_WINDOW_KEY : "gps");
@@ -775,5 +795,6 @@ export function useReplayTelemetry(
     loading: runKey !== null && (overview.loading || settledKey !== runKey),
     error: overview.error,
     source,
+    overviewSummary,
   };
 }
