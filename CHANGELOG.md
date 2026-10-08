@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.2
+
+A lane's first segment is loaded once.
+
+### Fixed
+
+- **A platform wrapper that attaches lanes from an effect no longer starts
+  each lane twice.** The core's restart effect REPLACED every lane's
+  registration on cleanup, so the detach `attachLane` returned could no
+  longer find its own registration and did nothing. A wrapper that
+  re-attaches whenever `attachLane` changes (as `@xorgate/react-native`
+  does, the moment the clock lands) therefore let the core start the lane,
+  then tore it down and started it again. On iOS, cancelling a native load
+  does not stop its download, so the first segment came down twice: 13.6 MB
+  on the wire for a 7.3 MB segment and the first frame 9.7 s out instead of
+  6.1 s on a 12 Mbps link. Android's player dropped the duplicate before it
+  cost any bytes. Registrations are now updated in place.
+- **A `<video>` removed while its player stays mounted stops its lane.** The
+  same lost registration meant `laneVideoRef`'s detach left the engine
+  running, still fetching, on an element that was no longer on the page.
+
+The browser's own lane lifecycle is otherwise unchanged: first load,
+re-signed URLs, a new replay and unmount request the same segments as in
+0.4.1, with and without `StrictMode` (`test/use-replay-player.dom.test.tsx`).
+
+### Known issues
+
+- `laneVideoRef` caches each lane's ref callback over the FIRST render's
+  `attachLane`, before the clock exists. A `<video>` that attaches after that
+  (moved to another parent, or removed and brought back) gets a lane that
+  never starts.
+- A new manifest delivered to a mounted player starts one throwaway lane
+  against the previous replay's clock before the real one. A consumer that
+  remounts per replay never takes this path.
+
 ## 0.4.1
 
 Artifact mode reads the replay's WINDOW, not whole telemetry sessions.

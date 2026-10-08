@@ -447,21 +447,24 @@ export function useReplayPlayerCore(
 
   // Restart lane runtimes when the replay (clock/lanes) changes while the
   // media stays attached.
+  //
+  // The runtimes are updated IN PLACE, never replaced: `attachLane`'s detach
+  // finds its registration by identity. Swapping in a new object here made
+  // that detach a no-op, so a wrapper that re-attaches when `attachLane`
+  // changes (the React Native one does) left this effect to start the lane
+  // and then tore it down to start it again — one wasted segment load per
+  // replay, which a native player does not cancel.
   useEffect(() => {
     for (const [streamKey, runtime] of runtimes.current) {
       runtime.cleanup();
-      const cleanup = startLane(streamKey, runtime.createEngine);
-      runtimes.current.set(streamKey, {
-        createEngine: runtime.createEngine,
-        cleanup: cleanup ?? (() => undefined),
-      });
+      runtime.cleanup = startLane(streamKey, runtime.createEngine) ?? (() => undefined);
     }
     return () => {
-      for (const runtime of runtimes.current.values()) runtime.cleanup();
       // Keep the registrations: the factories re-run on the next clock via
       // this effect.
-      for (const [key, runtime] of runtimes.current) {
-        runtimes.current.set(key, { createEngine: runtime.createEngine, cleanup: () => undefined });
+      for (const runtime of runtimes.current.values()) {
+        runtime.cleanup();
+        runtime.cleanup = () => undefined;
       }
     };
   }, [startLane]);
